@@ -41,7 +41,10 @@ DEEP=false
 if [ -z "$APPNAME" ]; then
   echo "Usage: $0 \"AppName\" [--deep]"
   echo "Installed applications:"
-  ls /Applications | grep '\.app$' | sed 's/\.app$//' | sed 's/^/  /'
+  for A in /Applications/*.app; do
+    [ -e "$A" ] || continue
+    echo "  $(basename "$A" .app)"
+  done
   exit 1
 fi
 
@@ -54,9 +57,23 @@ APP_PATH=""
 for CAND in "/Applications/$APPNAME.app" "/Applications/$APPNAME" "$HOME/Applications/$APPNAME.app"; do
   [ -d "$CAND" ] && APP_PATH="$CAND" && break
 done
-# Fuzzy fallback
+# Fuzzy fallback: first /Applications bundle whose name contains APPNAME,
+# case-insensitively. Glob + `case` instead of `ls | grep` (SC2010).
+# NOTE: the search term is now matched as a LITERAL substring rather than as a
+# regex. For ordinary app names this is identical; for a name containing regex
+# metacharacters it is strictly safer, since this value goes on to drive `find`
+# and `pkill`. bash 3.2 safe: no ${var,,}, so `tr` does the case folding.
 if [ -z "$APP_PATH" ]; then
-  MATCH=$(ls /Applications 2>/dev/null | grep -i "$APPNAME" | grep '\.app$' | head -1)
+  MATCH=""
+  NEEDLE=$(printf '%s' "$APPNAME" | tr '[:upper:]' '[:lower:]')
+  for A in /Applications/*.app; do
+    [ -e "$A" ] || continue
+    BUNDLE=$(basename "$A")
+    HAYSTACK=$(printf '%s' "$BUNDLE" | tr '[:upper:]' '[:lower:]')
+    case "$HAYSTACK" in
+      *"$NEEDLE"*) MATCH="$BUNDLE"; break ;;
+    esac
+  done
   [ -n "$MATCH" ] && APP_PATH="/Applications/$MATCH"
 fi
 

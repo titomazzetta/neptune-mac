@@ -85,7 +85,12 @@ snapshot() {
     done
     ls /Library/PrivilegedHelperTools 2>/dev/null | sed 's|^|helper:|'
     systemextensionsctl list 2>/dev/null | grep -oE '[a-zA-Z0-9.-]+\.[a-zA-Z0-9.-]+ \(' | sed 's/ ($//;s/ (//' | sed 's|^|sysext:|'
-    ls /Applications 2>/dev/null | grep '\.app$' | sed 's|^|app:|'
+    # Glob, not `ls | grep` — handles names with spaces/newlines and satisfies SC2010.
+    # bash 3.2 safe: no globstar, no arrays, `[ -e ]` guards the no-match literal.
+    for A in /Applications/*.app; do
+      [ -e "$A" ] || continue
+      echo "app:$(basename "$A")"
+    done
     sudo lsof -i -P -n 2>/dev/null | awk '$NF ~ /LISTEN/ {print "listener:" $1 ":" $9}' | sort -u
   } | sort -u
 }
