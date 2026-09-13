@@ -1,0 +1,8 @@
+Demo artifacts live here.
+
+  neptune-demo.cast   asciinema recording — the source of truth. Plain JSON:
+                      read it and scrub it before committing.
+  neptune-demo.gif    generated FROM the cast with `agg`. Never recorded
+                      separately, so the two cannot drift.
+
+See the "Demo" section of README.md for the record + scrub + generate steps.
