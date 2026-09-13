@@ -25,7 +25,6 @@ BOLD=$(tput bold 2>/dev/null || true)
 RED=$(tput setaf 1 2>/dev/null || true)
 GRN=$(tput setaf 2 2>/dev/null || true)
 YEL=$(tput setaf 3 2>/dev/null || true)
-CYN=$(tput setaf 6 2>/dev/null || true)
 RST=$(tput sgr0 2>/dev/null || true)
 
 REPORT="$HOME/Desktop/redflag_report_$(date '+%Y-%m-%d_%H%M').txt"
@@ -234,7 +233,6 @@ else
 fi
 
 # Content filters / VPN via system extensions
-SYSEXT=$(systemextensionsctl list 2>/dev/null | grep -vE '^\s*(0|1|2|3|4|5|6|7|8|9)+ extension|^---|^enabled' | grep -E '\S' || true)
 if systemextensionsctl list 2>/dev/null | grep -qiE 'network_extension|endpoint_security'; then
   note "${YEL}Network/Endpoint extensions registered — verify each is yours:${RST}"
   systemextensionsctl list 2>/dev/null | grep -iE 'network_extension|endpoint_security' -A5 | sed 's/^/      /' | tee -a "$REPORT"

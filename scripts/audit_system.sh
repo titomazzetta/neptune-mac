@@ -37,7 +37,7 @@ ps -Amco pmem,pcpu,pid,comm | head -13 | sed 's/^/  /'
 # 2. Third-party persistence, with signing verification
 ############################################################
 check_plists() {
-  local DIR=$1 SUDO_NEEDED=$2
+  local DIR=$1
   [ -d "$DIR" ] || return 0
   local PLIST LABEL PROG SIGN
   for PLIST in "$DIR"/*.plist; do
@@ -72,13 +72,13 @@ check_plists() {
 }
 
 section "User launch agents (~/Library/LaunchAgents)"
-check_plists "$HOME/Library/LaunchAgents" no
+check_plists "$HOME/Library/LaunchAgents"
 
 section "Global launch agents (/Library/LaunchAgents)"
-check_plists "/Library/LaunchAgents" no
+check_plists "/Library/LaunchAgents"
 
 section "Global launch daemons (/Library/LaunchDaemons)"
-check_plists "/Library/LaunchDaemons" no
+check_plists "/Library/LaunchDaemons"
 
 section "Privileged helper tools (/Library/PrivilegedHelperTools)"
 if [ -d /Library/PrivilegedHelperTools ]; then

@@ -16,7 +16,6 @@
 set -u
 
 BOLD=$(tput bold 2>/dev/null || true)
-RED=$(tput setaf 1 2>/dev/null || true)
 GRN=$(tput setaf 2 2>/dev/null || true)
 YEL=$(tput setaf 3 2>/dev/null || true)
 CYN=$(tput setaf 6 2>/dev/null || true)
