@@ -121,6 +121,79 @@ can't be certain, it should say how to check — not guess.
 
 ---
 
+## Bug 6 — CI was red, and the lint findings weren't all cosmetic
+
+**Symptom:** GitHub Actions failing on `main`. `shellcheck --severity=warning`
+returned eight findings across five scripts: five SC2034 (unused variable) and
+three SC2010 (`ls | grep`).
+
+**Why it mattered — the honest version:** most of these were not live bugs. Four
+unused colour variables hurt nobody. But a red CI badge is worse than the sum of
+its findings: it trains you to stop reading the build. The bash-3.2 gate and the
+destructive-confirmation guard — the two checks that exist *specifically* because
+Bugs 3, 4 and 5 happened — live in the same workflow. Once the run is red by
+default, a real regression in those gates arrives as "still red," and nobody
+looks. A muted alarm is the same failure mode as a false "all clear"; it just
+takes longer to bite.
+
+**Root cause, per finding:**
+
+- *SC2034, four colour variables* (`RED` in `check_updates.sh` and `neptune.sh`,
+  `CYN` in `redflag_scan.sh`): copy-paste drift. Every script starts from the same
+  colour-helper preamble, and each one uses a different subset.
+- *SC2034, `SUDO_NEEDED` in `audit_system.sh`*: a `check_plists()` parameter that
+  was never read in the function body. All three call sites dutifully passed the
+  literal `no`. An interface that was designed, never implemented, and never
+  noticed because the argument was always the same.
+- *SC2034, `SYSEXT` in `redflag_scan.sh`*: dead code with a sting in it. The
+  variable was assigned from a `systemextensionsctl` pipeline and then never read;
+  the check below re-runs the command independently. Harmless — but it meant a
+  chunk of filtering logic sat in the traffic-interception section looking load-
+  bearing while doing nothing. Dead code in a security scanner reads as coverage
+  you don't have.
+- *SC2010, three `ls | grep '\.app$'` sites* (`sentry.sh` snapshot, `uninstall.sh`
+  usage listing and fuzzy fallback): parsing `ls` output to enumerate
+  `/Applications`. The classic objection is filenames with spaces or newlines.
+
+**Fix:** removed the dead variables (each confirmed unused by grep first — no
+script sources another, so nothing consumed them externally), dropped the
+vestigial parameter and its three call-site arguments, and replaced the `ls`
+pipelines with plain globs guarded by `[ -e "$A" ] || continue` for the
+no-match case. bash 3.2 throughout: no `globstar`, no arrays, no `${var,,}`.
+Verified byte-identical output against the old pipelines for names containing
+spaces and quotes, for a no-match search term, and for an empty directory.
+
+**The one finding that wasn't cosmetic.** The fuzzy app-name fallback in
+`uninstall.sh` was:
+
+```bash
+MATCH=$(ls /Applications 2>/dev/null | grep -i "$APPNAME" | grep '\.app$' | head -1)
+```
+
+`grep` treats `$APPNAME` as a **regular expression**. `$APPNAME` is user input, and
+the value it resolves to flows onward into `find -iname`, `pkill -f`, and the
+deletion list. So `./uninstall.sh "."` matched the first app alphabetically rather
+than failing to find anything — and a term containing `*`, `[`, or `+` either
+errored or matched something the user didn't mean. The confirmation gate still
+stood between that and any deletion, which is exactly why this never became an
+incident. But "the safety net caught it" is not the same as "the input was
+handled correctly," and this is the destructive script. The replacement matches
+the term as a **literal substring** via a `case` pattern with the expansion
+quoted, so metacharacters are inert.
+
+**Lesson:** triage lint findings, don't batch-dismiss them. The instinct with a
+wall of style warnings is to silence the noisy ones and move on; seven of these
+eight genuinely were noise. The eighth was untrusted input reaching a regex on the
+path to `rm -rf`, wearing the same yellow SC2010 badge as a cosmetic `ls | grep`.
+The severity of a lint rule is a property of the rule. The severity of a *finding*
+is a property of where it sits in your blast radius — which the linter can't know
+and you can.
+
+**Second lesson, aimed at future me:** a green CI is a precondition for CI being
+useful at all, not a nice-to-have. Fix it the day it goes red.
+
+---
+
 ## Cross-cutting practices that came out of these
 
 - **CI as a regression net for exactly these bugs.** The pipeline runs shellcheck,
