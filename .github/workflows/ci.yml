@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  lint:
+    name: ShellCheck + syntax + bash 3.2 compat
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Syntax check (bash -n) all scripts
+        run: |
+          fail=0
+          for f in scripts/*.sh; do
+            if bash -n "$f"; then
+              echo "  ok  $f"
+            else
+              echo "FAIL  $f"; fail=1
+            fi
+          done
+          exit $fail
+
+      - name: ShellCheck all scripts
+        run: shellcheck --shell=bash --severity=warning scripts/*.sh
+
+      - name: Guard against bash 3.2 incompatibilities
+        run: |
+          # These patterns silently break on macOS's bash 3.2. Fail the build
+          # if any appear, so a contributor/agent can't reintroduce them.
+          fail=0
+
+          # 'case' inside $(...) command substitution — 3.2 parser bug
+          if grep -nE '\$\([^)]*\bcase\b' scripts/*.sh; then
+            echo "ERROR: 'case' inside \$() command substitution (breaks bash 3.2)"; fail=1
+          fi
+
+          # Unguarded empty-array expansion under set -u:  "${ARR[@]}" without :+
+          # Heuristic: flag "${...[@]}" NOT using the :+ guard, for review.
+          if grep -nE '"\$\{[A-Za-z_][A-Za-z0-9_]*\[@\]\}"' scripts/*.sh \
+               | grep -v ':+'; then
+            echo "WARN: possible unguarded empty-array expansion — use \${ARR[@]:+\"\${ARR[@]}\"}"
+            # warning only; some are provably non-empty. Reviewer confirms.
+          fi
+
+          # associative arrays — unsupported in 3.2
+          if grep -nE 'declare -A' scripts/*.sh; then
+            echo "ERROR: associative arrays (declare -A) unsupported in bash 3.2"; fail=1
+          fi
+
+          # mapfile / readarray — unsupported in 3.2
+          if grep -nE '\b(mapfile|readarray)\b' scripts/*.sh; then
+            echo "ERROR: mapfile/readarray unsupported in bash 3.2"; fail=1
+          fi
+
+          exit $fail
+
+      - name: Verify destructive scripts still require confirmation
+        run: |
+          # Guardrail: the two mutating scripts must contain an interactive
+          # confirmation prompt. This is a coarse check, not a proof, but it
+          # catches an accidental removal of the safety gate.
+          fail=0
+          for f in scripts/uninstall.sh scripts/remove_mackeeper.sh; do
+            if grep -qE 'read -r?.*\[y/N\]|read -r?.*confirm' "$f"; then
+              echo "  ok  $f has a confirmation prompt"
+            else
+              echo "FAIL  $f is missing its confirmation prompt"; fail=1
+            fi
+          done
+          exit $fail

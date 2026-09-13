@@ -1,0 +1,7 @@
+# Neptune runtime artifacts — never commit these
+*_report_*.txt
+neptune_full_report_*.txt
+sentry_report_*.txt
+redflag_report_*.txt
+.sentry/
+.DS_Store
