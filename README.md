@@ -32,6 +32,11 @@ can audit yourself.
 - **Modular.** Each script does one job and fails independently.
 - **Transparent.** It's all bash you can read. No compiled blobs, no API keys.
 - **Human-in-the-loop.** A person is always at the keyboard for destructive steps.
+- **No third-party network calls by default.** The full suite contacts nobody.
+  Exactly two opt-in flags reach the internet and neither runs unless you ask:
+  `network_check.sh --public-ip` (asks api.ipify.org what your public IP is) and
+  `netcheck_plus.sh --load` (saturates the link against a public test file to
+  measure bufferbloat). Latency checks ping your own gateway and 1.1.1.1.
 
 ## The scripts
 

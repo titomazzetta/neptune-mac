@@ -25,6 +25,14 @@ ok()   { echo "  ${GRN}[ok]${RST} $*"; }
 warn() { echo "  ${YEL}[!!]${RST} $*"; }
 bad()  { echo "  ${RED}[XX]${RST} $*"; }
 
+PUBLIC_IP=false
+[ "${1:-}" = "--public-ip" ] && PUBLIC_IP=true
+
+# Same guard the other scripts carry (CLAUDE.md constraint 5).
+if [ "$(id -u)" -eq 0 ]; then
+  echo "Run as your normal user, not with sudo."; exit 1
+fi
+
 is_private() {
   case "$1" in
     10.*|192.168.*) return 0 ;;
@@ -49,8 +57,19 @@ echo "  Interface:  ${IFACE:-?} $(networksetup -listallhardwareports 2>/dev/null
 echo "  Local IP:   ${LOCALIP:-?}"
 echo "  Gateway:    ${GATEWAY:-?}"
 
-PUBIP=$(curl -s --max-time 5 https://api.ipify.org 2>/dev/null || echo "?")
-echo "  Public IP:  $PUBIP"
+# Opt-in. This was unconditional, and neptune.sh runs this script as part of the
+# standard suite — so every `./neptune.sh` made a third-party request. CLAUDE.md
+# constraint 4 permits network use only where it is OPTIONAL, and a tool that
+# advertises "no telemetry" should not quietly contact anyone by default. It
+# also kept your public IP out of nothing: the value lands in the Desktop report
+# the README tells you to copy and paste for review.
+PUBIP=""
+if $PUBLIC_IP; then
+  PUBIP=$(curl -s --max-time 5 https://api.ipify.org 2>/dev/null || true)
+  echo "  Public IP:  ${PUBIP:-<lookup failed>}   (queried api.ipify.org)"
+else
+  echo "  Public IP:  not checked — re-run with --public-ip to ask api.ipify.org"
+fi
 
 ############################################################
 # 2. Double-NAT detection
@@ -92,7 +111,7 @@ else
   echo "       This usually means double NAT: ISP gateway in router mode in front of"
   echo "       your mesh. BUT ISP boxes in IP-passthrough mode can still echo their"
   echo "       private IP as a hop. Definitive test: check your router's WAN IP —"
-  echo "         public IP ($PUBIP) shown  -> passthrough working, you're fine"
+  echo "         your public IP${PUBIP:+ ($PUBIP)} shown -> passthrough working, you're fine"
   echo "         192.168.x / 10.x shown    -> double NAT is real; enable bridge/IP-"
   echo "                                      passthrough on the ISP gateway"
 fi
@@ -144,9 +163,16 @@ echo "  QoS/'Adaptive QoS' on the ASUS — that's the fix."
 ############################################################
 section "Active connections by app"
 
+# Deliberately NOT sudo. This script elevates nowhere else, and prompting for a
+# password to list connections is a poor trade for a quick network check. The
+# consequence is real and must be stated rather than left for the reader to
+# discover: without root, lsof sees only THIS user's processes.
 lsof -i -P -n 2>/dev/null | awk '$NF=="(ESTABLISHED)" {print $1}' | sort | uniq -c | sort -rn | head -15 | \
   awk '{printf "  %4d  %s\n", $1, $2}'
 
+echo
+warn "Unprivileged view: your own processes only. Root-owned daemons are NOT"
+echo "       listed here — sentry.sh and redflag_scan.sh elevate and do cover them."
 echo
 echo "  High counts are normal for browsers and sync apps (Chrome, MEGAsync, Slack)."
 echo "  What deserves a second look: apps you are NOT actively using holding many"
