@@ -39,6 +39,10 @@ flag() {
 }
 ok()   { out "  ${GRN}[ok]${RST} $*"; }
 note() { out "  $*"; }
+# [!!] for "this is not a red flag, but you should see it" — including a check
+# that could NOT be performed. neptune.sh greps [!!] into the action digest, so
+# unlike note() this cannot be scrolled past silently.
+warn() { out "  ${YEL}[!!]${RST} $*"; }
 
 if [ "$(id -u)" -eq 0 ]; then
   echo "Run as your normal user, not with sudo."; exit 1
@@ -84,11 +88,31 @@ case "$GK" in
   *) flag "Gatekeeper is DISABLED — unsigned apps run without checks" ;;
 esac
 
-FW=$(sudo defaults read /Library/Preferences/com.apple.alf globalstate 2>/dev/null || echo "?")
-case "$FW" in
-  1|2) ok "Application firewall: enabled (state $FW)" ;;
-  0) note "${YEL}Application firewall: off${RST} — common default, but worth enabling on laptops that join public Wi-Fi" ;;
-  *) note "Application firewall state unknown" ;;
+# Ask socketfilterfw first — the supported interface. The com.apple.alf plist is
+# not a reliable source on current macOS: on a macOS 26.6.2 test machine it
+# returned nothing, so this check silently degraded to an "unknown" note while
+# the summary still reported an otherwise clean security baseline. A security
+# check that cannot run must say so loudly, not pass quietly.
+FW_STATE=""
+SFW=/usr/libexec/ApplicationFirewall/socketfilterfw
+if [ -x "$SFW" ]; then
+  FW_OUT=$("$SFW" --getglobalstate 2>/dev/null)
+  case "$FW_OUT" in
+    *disabled*) FW_STATE=off ;;
+    *enabled*)  FW_STATE=on ;;
+  esac
+fi
+if [ -z "$FW_STATE" ]; then
+  FW_ALF=$(sudo defaults read /Library/Preferences/com.apple.alf globalstate 2>/dev/null || true)
+  case "$FW_ALF" in
+    1|2) FW_STATE=on ;;
+    0)   FW_STATE=off ;;
+  esac
+fi
+case "$FW_STATE" in
+  on)  ok "Application firewall: enabled" ;;
+  off) warn "Application firewall is OFF — a common default, but worth enabling on any machine that joins public Wi-Fi" ;;
+  *)   warn "Application firewall state COULD NOT BE DETERMINED (socketfilterfw and com.apple.alf both unreadable) — this check did NOT run; the baseline below is incomplete" ;;
 esac
 
 XP=$(defaults read /Library/Apple/System/Library/CoreServices/XProtect.bundle/Contents/Info.plist CFBundleShortVersionString 2>/dev/null || echo "?")
