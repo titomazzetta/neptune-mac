@@ -53,7 +53,7 @@ check_plists() {
     # Signing status of the executable
     if [ -n "$PROG" ] && [ -e "$PROG" ]; then
       if codesign -v "$PROG" 2>/dev/null; then
-        SIGNER=$(codesign -dv "$PROG" 2>&1 | grep -m1 '^Authority=' | cut -d= -f2)
+        SIGNER=$(codesign -dvv "$PROG" 2>&1 | grep -m1 '^Authority=' | cut -d= -f2)
         SIGN="${GRN}signed${RST} (${SIGNER:-unknown authority})"
       else
         SIGN="${RED}UNSIGNED or invalid signature${RST}"
@@ -85,7 +85,7 @@ if [ -d /Library/PrivilegedHelperTools ]; then
   for H in /Library/PrivilegedHelperTools/*; do
     [ -e "$H" ] || continue
     if codesign -v "$H" 2>/dev/null; then
-      SIGNER=$(codesign -dv "$H" 2>&1 | grep -m1 '^Authority=' | cut -d= -f2)
+      SIGNER=$(codesign -dvv "$H" 2>&1 | grep -m1 '^Authority=' | cut -d= -f2)
       echo "  $(basename "$H") — ${GRN}signed${RST} (${SIGNER:-?})"
     else
       echo "  $(basename "$H") — ${RED}UNSIGNED${RST}"

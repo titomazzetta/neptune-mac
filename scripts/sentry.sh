@@ -62,7 +62,7 @@ sig() {
   [ -e "$BIN" ] || { echo "missing"; return; }
   if codesign -v "$BIN" 2>/dev/null; then
     local AUTH
-    AUTH=$(codesign -dv "$BIN" 2>&1 | grep -m1 '^Authority=' | cut -d= -f2)
+    AUTH=$(codesign -dvv "$BIN" 2>&1 | grep -m1 '^Authority=' | cut -d= -f2)
     case "$AUTH" in
       "Software Signing"|"Apple Mac OS Application Signing") echo "apple" ;;
       *) echo "signed" ;;

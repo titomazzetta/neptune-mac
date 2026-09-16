@@ -126,8 +126,8 @@ while IFS= read -r APP; do
   # Skip if App Store (has receipt)
   [ -e "$APP/Contents/_MASReceipt/receipt" ] && continue
   # Skip Apple's own apps
-  if codesign -dv "$APP" 2>&1 | grep -q "Authority=Apple Root CA"; then
-    SIGNER=$(codesign -dv "$APP" 2>&1 | grep -m1 'Authority=' | cut -d= -f2)
+  if codesign -dvv "$APP" 2>&1 | grep -q "Authority=Apple Root CA"; then
+    SIGNER=$(codesign -dvv "$APP" 2>&1 | grep -m1 'Authority=' | cut -d= -f2)
     case "$SIGNER" in *"Software Signing"*) continue ;; esac
   fi
   VER=$(defaults read "$APP/Contents/Info" CFBundleShortVersionString 2>/dev/null || echo "?")
