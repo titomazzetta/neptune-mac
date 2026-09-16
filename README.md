@@ -78,7 +78,9 @@ See [`docs/SETUP.md`](docs/SETUP.md) for full setup, contributor, and push notes
 -->
 
 > **Recording pending.** The scaffolding below is ready; the cast needs live
-> system state, so it's recorded by hand rather than generated in CI.
+> system state, so it's recorded by hand rather than generated in CI. In the
+> meantime, [`docs/sample-report.txt`](docs/sample-report.txt) is a real run's
+> full output.
 
 <details>
 <summary><strong>How to record it</strong> (maintainer notes)</summary>
@@ -166,6 +168,12 @@ tools, Docker, VPNs) routinely fails code-signing checks for benign reasons. See
 [`docs/reading-reports.md`](docs/reading-reports.md) for how to tell a real
 finding from a vendor quirk, and [`docs/advisor.md`](docs/advisor.md) for using
 an LLM to help interpret a report.
+
+**See the actual output:** [`docs/sample-report.txt`](docs/sample-report.txt) is
+a real `./neptune.sh` run on a live machine, sanitized (hostname, username,
+addresses replaced with obvious placeholders) and committed verbatim otherwise —
+rough edges included. It's the fastest way to judge whether this tool is worth
+running, without running it.
 
 ## Compatibility
 
