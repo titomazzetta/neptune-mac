@@ -11,7 +11,12 @@
 #
 # Usage:   ./netcheck_plus.sh
 #          ./netcheck_plus.sh --load   also runs an under-load latency test
-#                                        (downloads ~25MB to measure bufferbloat)
+#
+# --load is the ONLY part of this script that touches the network beyond your
+# own LAN and DNS. It saturates the link for ~8 seconds by pulling from a 100MB
+# public test file and aborting; how much actually transfers depends on your
+# line speed, so on a fast connection expect tens of megabytes. Don't run it on
+# a metered or capped connection.
 
 set -u
 
@@ -30,6 +35,13 @@ note() { echo "  $*"; }
 
 LOAD=false
 [ "${1:-}" = "--load" ] && LOAD=true
+
+# Same guard the other scripts carry (CLAUDE.md constraint 5): read-only scans
+# have no reason to run as root, and running one under sudo would write any
+# stray artefact as root.
+if [ "$(id -u)" -eq 0 ]; then
+  echo "Run as your normal user, not with sudo."; exit 1
+fi
 
 echo "${BOLD}Network dial-in check — $(date '+%Y-%m-%d %H:%M')${RST}"
 
@@ -105,7 +117,8 @@ fi
 ############################################################
 if $LOAD; then
   section "3. Bufferbloat (latency under load)"
-  note "Measuring idle vs loaded latency (downloading ~25MB)..."
+  note "Measuring idle vs loaded latency (saturating the link for ~8s; the"
+  note "transfer is aborted after, so volume scales with your line speed)..."
   IDLE=$(ping -c 5 -q "${GATEWAY:-1.1.1.1}" 2>/dev/null | awk -F'/' '/avg/{print $5}')
   # Start a background download to saturate the link
   curl -s -o /dev/null "https://speed.hetzner.de/100MB.bin" &
@@ -133,17 +146,41 @@ fi
 section "4. LAN device census (who's on your network)"
 note "Populating ARP table (pinging your subnet)..."
 SUBNET=$(echo "${LOCALIP:-192.168.50.0}" | cut -d. -f1-3)
-for i in $(seq 1 254); do ping -c1 -t1 "${SUBNET}.$i" >/dev/null 2>&1 & done 2>/dev/null
-sleep 3
-echo
-printf "  %-16s %-20s\n" "IP" "MAC"
-arp -an | grep "(${SUBNET}." | while read -r line; do
+
+# Throttled sweep. The previous version launched all 254 pings at once and then
+# just slept 3 seconds — a needless fork storm that never actually waited, so a
+# slow responder could land in the ARP table after the census had been read.
+# Batches of 32 with an explicit wait: bounded, and the table is complete before
+# it is read.
+i=1
+while [ "$i" -le 254 ]; do
+  j=0
+  while [ "$j" -lt 32 ] && [ "$i" -le 254 ]; do
+    ping -c1 -t1 "${SUBNET}.$i" >/dev/null 2>&1 &
+    i=$((i + 1)); j=$((j + 1))
+  done
+  wait
+done
+
+# macOS `arp` formats MACs with ether_ntoa(), which does NOT zero-pad octets:
+# a real entry can read 8:0:27:a:b:c (13 chars), not only 3c:7c:3f:1a:2b:cc
+# (17). Matching a fixed {17} silently dropped every device with a single-digit
+# octet — in a census whose entire purpose is "spot the device you can't
+# place", the dropped rows are the ones that matter.
+CENSUS=$(arp -an | grep "(${SUBNET}\." | while read -r line; do
   IP=$(echo "$line" | grep -oE '\([0-9.]+\)' | tr -d '()')
-  MAC=$(echo "$line" | grep -oE '[0-9a-f:]{17}')
+  MAC=$(echo "$line" | grep -oiE '([0-9a-f]{1,2}:){5}[0-9a-f]{1,2}')
   [ -z "$MAC" ] && continue
   printf "  %-16s %-20s\n" "$IP" "$MAC"
-done | sort -t. -k4 -n
-COUNT=$(arp -an | grep -c "(${SUBNET}.")
+done | sort -t. -k4 -n)
+
+echo
+printf "  %-16s %-20s\n" "IP" "MAC"
+[ -n "$CENSUS" ] && echo "$CENSUS"
+
+# Count the rows actually shown. Counting raw `arp` lines included
+# "(incomplete)" entries, so the total disagreed with the table beneath it.
+COUNT=$(printf '%s' "$CENSUS" | grep -c ':' || true)
 echo
 note "${COUNT} device(s) responded. Match each to something you own. An IP+MAC"
 note "you can't place is worth investigating in the ASUS client list, which shows"
