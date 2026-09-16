@@ -84,7 +84,12 @@ DIGEST="$TMP/digest.txt"
 grep -hE '^\s*(\[FLAG\]|\[!!\]|\[XX\]|[0-9]+\. )' "$TMP"/*.txt 2>/dev/null \
   | sed 's/^[[:space:]]*//' | sort -u > "$DIGEST"
 
-FLAGCOUNT=$(grep -cE '^\[FLAG\]|^\[XX\]' "$DIGEST" 2>/dev/null || echo 0)
+# `grep -c` PRINTS 0 and EXITS 1 when nothing matches, so `|| echo 0` appended a
+# SECOND zero and a clean run rendered as "Digest (0\n0 flag/error line(s))".
+# Take grep's count as-is; substitute only when the command produced no output
+# at all (e.g. the digest file is missing).
+FLAGCOUNT=$(grep -cE '^\[FLAG\]|^\[XX\]' "$DIGEST" 2>/dev/null)
+[ -n "$FLAGCOUNT" ] || FLAGCOUNT=0
 
 # Prepend the digest to the report
 FINAL="$TMP/final.txt"
