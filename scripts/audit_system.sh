@@ -50,6 +50,15 @@ check_plists() {
     PROG=$(defaults read "$PLIST" ProgramArguments 2>/dev/null | sed -n 's/^[[:space:]]*"\{0,1\}\([^",]*\).*/\1/p' | head -2 | tail -1)
     [ -z "$PROG" ] && PROG=$(defaults read "$PLIST" Program 2>/dev/null)
 
+    # A plist may name a bare command ("launchctl", "open") rather than a path.
+    # Without this, such entries were reported as "TARGET MISSING (orphaned
+    # plist)" — a false alarm on Apple's own limit.maxfiles/limit.maxproc.
+    # redflag_scan.sh already resolved these; the two scripts disagreed on the
+    # same plist. Keep them in step.
+    if [ -n "$PROG" ] && [ ! -e "$PROG" ] && command -v "$PROG" >/dev/null 2>&1; then
+      PROG=$(command -v "$PROG")
+    fi
+
     # Signing status of the executable
     if [ -n "$PROG" ] && [ -e "$PROG" ]; then
       if codesign -v "$PROG" 2>/dev/null; then
