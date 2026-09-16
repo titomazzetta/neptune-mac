@@ -21,6 +21,13 @@ RST=$(tput sgr0 2>/dev/null || true)
 
 section() { echo; echo "${BOLD}${CYN}== $* ==${RST}"; }
 
+# Refuse to run wholesale as root (CLAUDE.md constraint 5). This script elevates
+# only `du` on system paths; running the whole thing under sudo gains nothing and
+# risks writing root-owned artefacts into the user's home.
+if [ "$(id -u)" -eq 0 ]; then
+  echo "Run as your normal user, not with sudo."; exit 1
+fi
+
 echo "${BOLD}System audit — $(date '+%Y-%m-%d %H:%M')${RST}"
 sudo -v || exit 1
 

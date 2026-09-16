@@ -29,6 +29,12 @@ note()    { echo "  $*"; }
 UPGRADE=false
 [ "${1:-}" = "--upgrade" ] && UPGRADE=true
 
+# Refuse to run wholesale as root (CLAUDE.md constraint 5). Homebrew in
+# particular refuses to operate as root, and `mas` needs the user's own session.
+if [ "$(id -u)" -eq 0 ]; then
+  echo "Run as your normal user, not with sudo."; exit 1
+fi
+
 confirm() {
   read -r -p "  ${BOLD}$1 [y/N]${RST} " R
   case "$R" in [yY]|[yY][eE][sS]) return 0 ;; *) return 1 ;; esac
