@@ -13,8 +13,21 @@
     ISP hops          -> 198.51.100.x         (RFC 5737 documentation range)
     one folder name   -> generic
 
-  Everything else is verbatim, including the rough edges. Read it as a real
-  run, not a polished demo: see `docs/DEVLOG.md` for what this output exposed.
+  Everything else is verbatim, including the rough edges.
+
+  CAPTURED BEFORE the fixes in this branch. It is kept as-is on purpose — it
+  is the evidence those fixes were made from. Visible here and since fixed:
+    - the action digest lists every finding twice and scatters sentence
+      fragments from the double-NAT explanation through the action list
+    - every signing authority reads "(unknown)": codesign was queried at the
+      wrong verbosity, so no certificate chain was ever returned
+    - Safari.app is listed as "not managed by brew/App Store" (it is Apple's)
+    - limit.maxfiles / limit.maxproc reported as orphaned plists by one scan
+      and as fine by another, in the same report
+    - "Application firewall state unknown" passes as a plain note
+    - 7 of 10 sentry flags are per-boot ephemeral port churn
+
+  Regenerate this file after the fixes to show current output.
 ================================================================================
 
 NEPTUNE FULL REPORT
