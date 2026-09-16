@@ -68,7 +68,7 @@ These are hard rules. Breaking any of them is a regression, even if the code
 ## Repository layout
 
 ```
-scripts/         the ten Neptune scripts (the actual tool)
+scripts/         the nine Neptune scripts (the actual tool)
 tests/           shellcheck config + syntax smoke tests
 docs/            extended docs, the report-reading guide, the AI-advisor prompt
 .github/workflows/  CI (lint, syntax, bash 3.2 compat gate)

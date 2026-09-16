@@ -194,6 +194,144 @@ useful at all, not a nice-to-have. Fix it the day it goes red.
 
 ---
 
+## Bug 7 — The signature check that never read a signature
+
+**Symptom:** every signed item in every scan reported `(unknown)`. Splice,
+Docker, Zoom, Arturia, Pioneer, PACE — all of them, on every run, on every
+machine. `signed (unknown authority)` in `audit_system.sh`; `— unknown` in the
+listener table; `signed:unknown` for privileged helpers.
+
+I had read past it for a long time as a cosmetic wart.
+
+**Root cause:** `codesign -dv` does not print the certificate chain. It prints
+`Executable=`, `Identifier=`, `Format=`, `CodeDirectory`, `Signature size`, and
+`Timestamp` — and stops. `Authority=` lines only appear at verbosity 2. So every
+
+```bash
+AUTH=$(codesign -dv "$BIN" 2>&1 | grep -m1 '^Authority=' | cut -d= -f2)
+```
+
+matched nothing, always, and `${AUTH:-unknown}` did exactly what it was told.
+Six call sites across four scripts.
+
+**Why it was worse than cosmetic.** `sentry.sh` classifies Apple binaries like
+this:
+
+```bash
+case "$AUTH" in
+  "Software Signing"|"Apple Mac OS Application Signing") echo "apple" ;;
+  *) echo "signed" ;;
+esac
+```
+
+`AUTH` was always empty, so the first branch was **structurally unreachable**.
+Nothing was ever classified as Apple — `/bin/launchctl` came back "(unknown)"
+like everything else. The Apple-vs-third-party distinction, which is the
+difference between "the OS starts this" and "someone else starts this", had
+never once worked.
+
+Third consequence, and the one that finally gave it away: `check_updates.sh`
+skips Apple's own apps with `grep -q "Authority=Apple Root CA"`. That never
+matched either, so **Safari.app** sat in the list of "apps NOT managed by brew or
+the App Store — these rely on their own updaters." Safari is Apple's. Seeing that
+in a real report is what sent me back to `codesign`.
+
+**Fix:** `-dvv` at all six sites. Verified against a real bundle:
+
+```
+$ codesign -dv  /Applications/Splice.app 2>&1 | grep '^Authority='
+$ codesign -dvv /Applications/Splice.app 2>&1 | grep '^Authority='
+Authority=Developer ID Application: Distributed Creation Inc (9962T6AKMH)
+Authority=Developer ID Certification Authority
+Authority=Apple Root CA
+```
+
+**Lesson:** `PHILOSOPHY.md` claims this project does "persistence analysis —
+enumerating every macOS persistence vector and verifying each against code
+signatures." The enumeration was real. The verification was half-real: it could
+tell signed from unsigned, because `codesign -v` genuinely answers that, but the
+part that says *who* silently returned nothing from the day it was written.
+
+The tell was on screen the whole time. A field reading `(unknown)` for every row
+is not a formatting quirk — a value that is constant across all inputs is a value
+that isn't being computed. I had trained myself to skim past it because it looked
+like noise, which is the same reflex that makes a noisy scanner dangerous. See
+Bug 8.
+
+---
+
+## Bug 8 — The bugs were all in the reporting layer, not the collection layer
+
+**Symptom:** a full `./neptune.sh` run on a clean machine produced an action
+digest claiming 25 findings across ~45 lines, for about 18 real ones — with
+sentence fragments like `[XX] passthrough on the ISP gateway` listed as action
+items, every finding printed twice, and the numbering running 1., 10., 2., 3.
+
+**Why group these:** Neptune's *collection* was fine. It correctly found four
+unsigned launch items, two unsigned root helpers, a second private router, and a
+real latency problem. Every defect in this pass was downstream of that — in what
+gets counted, what gets surfaced, and what gets said when a check can't run. Four
+faults, one theme:
+
+**1. A finding prefix is load-bearing, so anything wearing one becomes a
+finding.** The digest matched `[0-9]+\. ` alongside the `[FLAG]`/`[!!]`/`[XX]`
+prefixes — but `1. `, `2. ` is how each scan numbers its *own* end-of-scan
+summary, which restates the same findings. So everything appeared twice, and
+`sort -u` then interleaved two scans' independent numbering into nonsense.
+Meanwhile `network_check.sh` explained double NAT with **seven consecutive
+`bad()` calls**, so one problem became seven findings and its prose became action
+items. Fixed by collecting prefixed lines only, and by letting continuation prose
+be continuation prose. One finding, one prefixed line.
+
+**2. A scanner that is 70% noise is a scanner you stop reading.** Seven of
+`sentry.sh`'s ten flags were `rapportd` and Splice holding different ports than
+at the last baseline. macOS reassigns ports in 49152–65535 every boot, so the
+port number is churn and the process plus interface scope is the signal. The
+baseline now records those as `:ephemeral`. Verified it still catches a new
+listening process, and still catches one moving from `[::1]` to `*` — the two
+things the check exists for. (Roadmap #5, and it turns out to be the difference
+between a flag list you read and one you skim.)
+
+**3. A check that could not run reported nothing at all.** The firewall check
+read `com.apple.alf globalstate`, which returns nothing on macOS 26.6.2, and fell
+through to an unprefixed `note` that the digest does not collect — while the RED
+FLAG SUMMARY went on to report an otherwise clean security baseline. A reader
+sees SIP enabled, Gatekeeper enabled, eight unrelated flags, and reasonably
+concludes the baseline was checked. A third of it wasn't. Now queries
+`socketfilterfw` first and, if every source is unreadable, says so as `[!!]`.
+
+**4. Two scans disagreed about the same file, in the same report.**
+`redflag_scan.sh` resolved plists naming a bare command (`launchctl`, `open`) via
+`command -v` and reported them fine. `audit_system.sh` lacked that step and
+called Apple's own `limit.maxfiles` and `limit.maxproc` orphaned plists. Both
+verdicts printed in the same combined report, pages apart.
+
+**Lesson, and it is the roadmap's:** the digest was built by grepping the scans'
+prettified human output. That interposes a parser — one whose input format was
+never specified — between "what was found" and "what was reported", and every
+fault above lives in that gap. Fixing the greps fixed these four instances. It
+did not close the gap.
+
+This is the concrete argument for the structured-findings work in `ROADMAP.md`,
+and it changes its shape: `--json` should not be a second output path bolted
+alongside the text report, because that leaves the parser in place and adds a
+second consumer that can disagree with the first. Findings should be recorded as
+structured records **at the point of discovery**, with both the human report and
+the JSON rendered from that one list. Then the digest is a filter over an array,
+and a summary that contradicts its own findings stops being expressible.
+
+The advisor loop needs that guarantee more than it needs JSON. A model reasoning
+over a view that can silently diverge from what the human sees is worse than no
+advisor at all.
+
+**Second lesson:** every bug in this pass was findable from fixture strings — a
+captured `codesign` block, a captured `lsof` block, a few lines of scan output.
+None needed a Mac. `ROADMAP.md` defers test fixtures as "non-trivial" because it
+frames them as mocking `launchctl`, `lsof` and `system_profiler`. The pure
+text-processing layer needs no mocks, and that is where the bugs actually were.
+
+---
+
 ## Cross-cutting practices that came out of these
 
 - **CI as a regression net for exactly these bugs.** The pipeline runs shellcheck,
