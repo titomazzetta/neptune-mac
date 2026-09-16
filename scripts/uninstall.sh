@@ -96,13 +96,30 @@ SHORTNAME=$(basename "${APP_PATH:-$APPNAME}" .app)
 ############################################################
 # 2. Stop it
 ############################################################
-section "2. Stopping processes"
+section "2. Processes matching '$SHORTNAME'"
 
-if [ -n "$APP_PATH" ]; then
-  osascript -e "quit app \"$SHORTNAME\"" 2>/dev/null
-  sleep 1
+# READ-ONLY. This stage used to run `pkill -if "$SHORTNAME"` right here — before
+# the user had seen a single thing or agreed to anything. Terminating processes
+# is a mutation, and `-f` matches the whole command line case-insensitively, so
+# a short or generic search term ("code", "Go", "Box") silently killed an
+# unpredictable set of unrelated programs. The script's own guarantee is "never
+# does anything without showing it first"; that was true of files and false of
+# processes.
+#
+# Now: list here, confirm in stage 5, and stop in stage 6 BY PID — exactly the
+# processes that were displayed, never a fresh pattern match after the fact.
+PROC_PIDS=""
+if [ ${#SHORTNAME} -lt 3 ]; then
+  warn "Search term '$SHORTNAME' is under 3 characters — process scan skipped."
+  warn "A term that short matches almost anything. Quit the app yourself first."
+else
+  while IFS= read -r LINE; do
+    [ -z "$LINE" ] && continue
+    PROC_PIDS="$PROC_PIDS ${LINE%% *}"
+    warn "Running: $LINE"
+  done < <(pgrep -il -f "$SHORTNAME" 2>/dev/null | grep -v "^$$ ")
 fi
-pkill -if "$SHORTNAME" 2>/dev/null && ok "Killed running processes" || ok "No processes running"
+[ -z "$PROC_PIDS" ] && ok "No matching processes running"
 
 ############################################################
 # 3. Launch agents / daemons / helpers
@@ -185,6 +202,13 @@ section "5. Review — everything that will be deleted"
 
 TOTAL=0
 [ -n "$APP_PATH" ] && { echo "  ${BOLD}App:${RST}"; echo "      $APP_PATH"; TOTAL=$((TOTAL+1)); }
+if [ -n "$PROC_PIDS" ]; then
+  echo "  ${BOLD}Running processes (these will be stopped first):${RST}"
+  for P in $PROC_PIDS; do
+    echo "      pid $P  $(ps -p "$P" -o comm= 2>/dev/null)"
+    TOTAL=$((TOTAL+1))
+  done
+fi
 if [ ${#PLISTS[@]} -gt 0 ] || [ ${#HELPERS[@]} -gt 0 ]; then
   echo "  ${BOLD}Persistence:${RST}"
   for P in ${PLISTS[@]:+"${PLISTS[@]}"}; do echo "      $P"; TOTAL=$((TOTAL+1)); done
@@ -209,7 +233,7 @@ echo "  ${BOLD}$TOTAL item(s) total.${RST} Review the list above carefully —"
 echo "  especially any entries that look like they belong to OTHER software."
 $DEEP && warn "Deep mode matched on vendor '$VENDOR' — extra scrutiny warranted."
 echo
-read -r -p "  Delete ALL of the above? [y/N] " REPLY
+read -r -p "  Stop those processes and delete ALL of the above? [y/N] " REPLY
 case "$REPLY" in [yY]|[yY][eE][sS]) ;; *) echo "  Aborted. Nothing was changed."; exit 0 ;; esac
 
 sudo -v || die "Could not obtain sudo"
@@ -220,6 +244,23 @@ sudo -v || die "Could not obtain sudo"
 section "6. Deleting"
 
 FAILED=()
+
+# Stop processes now — after the confirmation, and only the PIDs shown above.
+# Killing by stored PID rather than re-running a pattern match means what gets
+# terminated is exactly what the user approved, even if something else started
+# in the meantime that happens to match the name.
+if [ -n "$PROC_PIDS" ]; then
+  [ -n "$APP_PATH" ] && { osascript -e "quit app \"$SHORTNAME\"" 2>/dev/null; sleep 1; }
+  for P in $PROC_PIDS; do
+    kill "$P" 2>/dev/null && ok "Asked pid $P to quit"
+  done
+  sleep 1
+  for P in $PROC_PIDS; do
+    if kill -0 "$P" 2>/dev/null; then
+      kill -9 "$P" 2>/dev/null && warn "pid $P ignored SIGTERM — force-stopped"
+    fi
+  done
+fi
 
 # Unload persistence first
 for P in ${PLISTS[@]:+"${PLISTS[@]}"}; do
