@@ -83,13 +83,18 @@ elif [ -n "$CGNAT" ] && [ -z "$EXTRA_PRIV" ]; then
   warn "CGNAT hop detected ($CGNAT) — your ISP NATs upstream. Not fixable on"
   warn "your end; only matters for inbound connections/port forwarding."
 else
+  # ONE finding, then unprefixed continuation lines. The explanation used to be
+  # seven consecutive bad() calls, so neptune.sh's digest — which greps for the
+  # [XX] prefix — counted seven findings for one problem and scattered sentence
+  # fragments through the action list. A finding prefix marks a finding; prose
+  # that elaborates on it must not carry one.
   bad "SECOND PRIVATE ROUTER in path:$EXTRA_PRIV (beyond your gateway ${GATEWAY:-?})"
-  bad "This usually means double NAT: ISP gateway in router mode in front of"
-  bad "your mesh. BUT ISP boxes in IP-passthrough mode can still echo their"
-  bad "private IP as a hop. Definitive test: check your router's WAN IP —"
-  bad "  public IP ($PUBIP) shown  -> passthrough working, you're fine"
-  bad "  192.168.x / 10.x shown    -> double NAT is real; enable bridge/IP-"
-  bad "                               passthrough on the ISP gateway"
+  echo "       This usually means double NAT: ISP gateway in router mode in front of"
+  echo "       your mesh. BUT ISP boxes in IP-passthrough mode can still echo their"
+  echo "       private IP as a hop. Definitive test: check your router's WAN IP —"
+  echo "         public IP ($PUBIP) shown  -> passthrough working, you're fine"
+  echo "         192.168.x / 10.x shown    -> double NAT is real; enable bridge/IP-"
+  echo "                                      passthrough on the ISP gateway"
 fi
 
 ############################################################
@@ -118,8 +123,9 @@ if [ -n "${GATEWAY:-}" ]; then
   GW_PING=$(ping -c 5 -q "$GATEWAY" 2>/dev/null | awk -F/ '/round-trip|rtt/{print $5}')
   echo "  Gateway ($GATEWAY):  ${GW_PING:-?} ms avg"
   if [ -n "${GW_PING:-}" ] && awk "BEGIN{exit !($GW_PING > 10)}"; then
-    warn "Gateway latency over 10ms on your own LAN — if this is Wi-Fi, check mesh"
-    warn "node placement/backhaul; if Ethernet, that's unusual."
+    warn "Gateway latency over 10ms on your own LAN (${GW_PING} ms)"
+    echo "       If this is Wi-Fi, check mesh node placement/backhaul; if Ethernet,"
+    echo "       that's unusual."
   fi
 fi
 

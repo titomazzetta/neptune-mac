@@ -81,8 +81,16 @@ run_script "check_updates.sh" "UPDATE SCAN (macOS, brew, App Store, self-updater
 # Digest: pull every actionable line to the top of the file
 ############################################################
 DIGEST="$TMP/digest.txt"
-grep -hE '^\s*(\[FLAG\]|\[!!\]|\[XX\]|[0-9]+\. )' "$TMP"/*.txt 2>/dev/null \
-  | sed 's/^[[:space:]]*//' | sort -u > "$DIGEST"
+# Collect only PREFIXED finding lines. The numbered lines ('1. ', '2. ') that the
+# per-scan summaries print were matched here too, but they are restatements of
+# the same [FLAG] lines — so every finding landed in the digest twice, and
+# `sort -u` then interleaved two scans' numbering as 1., 10., 2., 3.
+#
+# Dedupe with awk rather than `sort -u` so each scan's findings stay in the order
+# that scan printed them (the glob groups by scan). Alphabetical order across
+# everything told the reader nothing and actively scrambled the numbered lines.
+grep -hE '^[[:space:]]*(\[FLAG\]|\[!!\]|\[XX\])' "$TMP"/*.txt 2>/dev/null \
+  | sed 's/^[[:space:]]*//' | awk '!seen[$0]++' > "$DIGEST"
 
 # `grep -c` PRINTS 0 and EXITS 1 when nothing matches, so `|| echo 0` appended a
 # SECOND zero and a clean run rendered as "Digest (0\n0 flag/error line(s))".
