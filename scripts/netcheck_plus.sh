@@ -144,8 +144,22 @@ fi
 # 4. LAN device census
 ############################################################
 section "4. LAN device census (who's on your network)"
-note "Populating ARP table (pinging your subnet)..."
-SUBNET=$(echo "${LOCALIP:-192.168.50.0}" | cut -d. -f1-3)
+if [ -z "${LOCALIP:-}" ]; then
+  # Previously this fell back to a hardcoded subnet — the author's own. If the
+  # local address could not be read, the script would ARP-sweep 254 addresses on
+  # a network the user may not even be attached to. Guessing is the wrong answer
+  # here: absence of a local IP is information, not a gap to paper over.
+  warn "No local IP detected — device census skipped"
+  echo "       Without a confirmed local address there is no way to know which"
+  echo "       subnet to sweep, and guessing one would mean sending 254 pings to"
+  echo "       a network you may not be on. Check the interface report above."
+  SUBNET=""
+else
+  note "Populating ARP table (pinging your subnet)..."
+  SUBNET=$(echo "$LOCALIP" | cut -d. -f1-3)
+fi
+
+if [ -n "$SUBNET" ]; then
 
 # Throttled sweep. The previous version launched all 254 pings at once and then
 # just slept 3 seconds — a needless fork storm that never actually waited, so a
@@ -183,8 +197,10 @@ printf "  %-16s %-20s\n" "IP" "MAC"
 COUNT=$(printf '%s' "$CENSUS" | grep -c ':' || true)
 echo
 note "${COUNT} device(s) responded. Match each to something you own. An IP+MAC"
-note "you can't place is worth investigating in the ASUS client list, which shows"
-note "device names the raw ARP table can't."
+note "you can't place is worth investigating in your router's client list, which"
+note "shows device names the raw ARP table can't."
+
+fi   # end: SUBNET known
 
 ############################################################
 # 5. ASUS settings audit
@@ -215,7 +231,7 @@ EOF
 
 echo
 note "${BOLD}If the ASUS has SSH enabled${RST} (Administration > System > Enable SSH),"
-note "read-only diagnostics from Terminal:  ssh admin@${GATEWAY:-192.168.50.1}"
+note "read-only diagnostics from Terminal:  ssh admin@${GATEWAY:-<your-router-ip>}"
 note "  nvram get wl1_chanspec   (5GHz channel)   cat /proc/loadavg  (router load)"
 
 echo
