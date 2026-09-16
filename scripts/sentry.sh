@@ -36,6 +36,11 @@ CYN=$(tput setaf 6 2>/dev/null || true)
 RST=$(tput sgr0 2>/dev/null || true)
 
 BASE="$HOME/.sentry"
+# Bump whenever snapshot() changes what it records. An old baseline compared
+# against a new format produces a wall of bogus NEW/REMOVED lines, which is
+# indistinguishable from a real incident — so a format change must reset the
+# baseline explicitly and say it did, never diff across the boundary.
+BASELINE_FORMAT=2
 REPORT="$HOME/Desktop/sentry_report_$(date '+%Y-%m-%d_%H%M').txt"
 mkdir -p "$BASE"
 FLAGS=()
@@ -91,7 +96,24 @@ snapshot() {
       [ -e "$A" ] || continue
       echo "app:$(basename "$A")"
     done
-    sudo lsof -i -P -n 2>/dev/null | awk '$NF ~ /LISTEN/ {print "listener:" $1 ":" $9}' | sort -u
+    # Collapse listener ports in the dynamic/ephemeral range (49152-65535).
+    # macOS reassigns those at every boot, so the port NUMBER is churn while the
+    # process and the interface scope are the actual signal. Unsuppressed,
+    # rapportd and Splice alone produced 6 of 10 flags on a known-clean machine
+    # — noise that teaches you to skim the flag list, which is how a real
+    # finding gets missed.
+    #
+    # This does NOT blind the check: a listening process that wasn't there
+    # before still appears, and one that moves from loopback to all-interfaces
+    # still changes its entry. Only the per-boot number is dropped. Fixed ports
+    # (anything below 49152) are recorded exactly as before.
+    sudo lsof -i -P -n 2>/dev/null | awk '
+      $NF ~ /LISTEN/ {
+        addr = $9
+        n = split(addr, p, ":")
+        if (p[n] + 0 >= 49152 && p[n] + 0 <= 65535) sub(/:[0-9]+$/, ":ephemeral", addr)
+        print "listener:" $1 ":" addr
+      }' | sort -u
   } | sort -u
 }
 
@@ -99,10 +121,23 @@ CURRENT="$BASE/current.txt"
 BASELINE="$BASE/baseline.txt"
 snapshot > "$CURRENT"
 
+FORMATFILE="$BASE/format"
+STORED_FORMAT=$(cat "$FORMATFILE" 2>/dev/null || echo 1)
+
 if [ ! -f "$BASELINE" ] || $REBASE; then
   cp "$CURRENT" "$BASELINE"
+  echo "$BASELINE_FORMAT" > "$FORMATFILE"
   ok "Baseline $( $REBASE && echo 're-established' || echo 'created' ): $(wc -l < "$BASELINE" | xargs) items now known-good"
   out "  Future runs will flag anything that appears or disappears."
+elif [ "$STORED_FORMAT" != "$BASELINE_FORMAT" ]; then
+  cp "$CURRENT" "$BASELINE"
+  echo "$BASELINE_FORMAT" > "$FORMATFILE"
+  warn "Baseline format changed (v${STORED_FORMAT} -> v${BASELINE_FORMAT}); baseline REPLACED, nothing diffed this run"
+  out "      Listener ports in the dynamic range are now recorded as ':ephemeral'"
+  out "      rather than a per-boot number. Your previous baseline is not"
+  out "      comparable, so it was replaced rather than diffed against — a"
+  out "      cross-format diff would have looked like dozens of new listeners."
+  out "      Re-run ./sentry.sh to compare against the new baseline."
 else
   NEW=$(comm -13 "$BASELINE" "$CURRENT")
   GONE=$(comm -23 "$BASELINE" "$CURRENT")
