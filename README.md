@@ -52,6 +52,28 @@ can audit yourself.
 | `uninstall.sh` | Guided complete app removal — finds every related file, shows it, confirms, deletes, verifies. |
 | `remove_mackeeper.sh` | Targeted, staged MacKeeper/Clario eradication. Kept as reference methodology. |
 
+## Effects at a glance
+
+What each script actually does to your machine. Full detail, including how to
+verify all of it yourself before running anything, is in
+[`SECURITY.md`](SECURITY.md).
+
+| Script | Elevates | Writes | Leaves your network |
+|---|---|---|---|
+| `neptune.sh` | prompts once, shared with children | report to Desktop | — |
+| `sentry.sh` | `lsof` | report to Desktop, baseline in `~/.sentry` | ping, DNS, traceroute |
+| `redflag_scan.sh` | `lsof`, root crontab, profiles | report to Desktop | — |
+| `audit_system.sh` | `du` on system paths | nothing | — |
+| `network_check.sh` | no | nothing | ping, DNS, traceroute; `--public-ip` adds api.ipify.org |
+| `netcheck_plus.sh` | no | nothing | ping, DNS, ARP sweep; `--load` adds a public test file |
+| `check_updates.sh` | only with `--upgrade` | nothing (installs with `--upgrade`) | via `softwareupdate` / `brew` / `mas` |
+| `uninstall.sh` | after confirmation | **deletes**, confirmed | — |
+| `remove_mackeeper.sh` | after confirmation | **deletes**, confirmed | — |
+
+No script runs wholesale as root — every one refuses to start under `sudo` and
+elevates only specific commands. Nothing is installed, scheduled, or left
+running: the entire footprint is `~/.sentry` plus the reports on your Desktop.
+
 ## Quick start
 
 ```bash
@@ -187,15 +209,33 @@ Apple ships) so they run everywhere without installing anything.
 
 ## Status & roadmap
 
-Neptune is actively evolving. The current tools are stable and battle-tested. The
-next major feature is structured (`--json`) report output and an orchestrated,
-interactive `observe → decide → act` front-end. See [`ROADMAP.md`](ROADMAP.md).
+Neptune is actively evolving. The next major feature is structured (`--json`)
+report output and an orchestrated, interactive `observe → decide → act`
+front-end. See [`ROADMAP.md`](ROADMAP.md) for what's planned and
+[`CHANGELOG.md`](CHANGELOG.md) for what's changed.
+
+The scripts have been run on live machines throughout, and the most recent audit
+pass found and fixed real defects in them — including a signing check that never
+read a signature and an uninstaller that stopped processes before asking. Those
+are written up in [`docs/DEVLOG.md`](docs/DEVLOG.md), along with a wrong
+diagnosis that was caught and retracted. If that record makes the tool look less
+polished than a clean README would, that is the intended trade: a security tool
+that hides its own history is asking you to trust a claim instead of evidence.
 
 ## Safety & disclaimer
 
 Neptune can delete files (via `uninstall.sh` and `remove_mackeeper.sh`), always
 after showing you what and asking. You are responsible for reviewing the list
-before confirming. Keep backups. This is a personal tool shared in good faith,
+before confirming. Keep backups.
+
+**Read [`SECURITY.md`](SECURITY.md) before the first run.** It documents exactly
+what leaves your machine (nothing, by default), what runs as root and why, what
+gets written to disk, how to remove Neptune completely, how to verify every one
+of those claims yourself with five `grep` commands — and, just as importantly,
+what Neptune does *not* detect. A scanner that implies more coverage than it has
+is worse than no scanner.
+
+This is a personal tool shared in good faith, with no formal security audit,
 provided as-is under the MIT License — no warranty.
 
 ## License

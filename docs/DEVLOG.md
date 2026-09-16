@@ -332,6 +332,82 @@ text-processing layer needs no mocks, and that is where the bugs actually were.
 
 ---
 
+## Correction — a bug that did not exist, and how it nearly got shipped
+
+Not a bug in Neptune. A wrong diagnosis *about* Neptune that got as far as five
+commits, a CI gate, a rule in `CLAUDE.md` and a full devlog entry before it was
+caught. It is recorded here because this file claims every entry is a real issue,
+and an honest record that quietly drops its own worst moment is not honest.
+
+**The claim.** During the audit above, working with an AI assistant, a conclusion
+was reached that `neptune.sh`'s action digest and `redflag_scan.sh`'s
+system-proxy check were silently dead on macOS. The reasoning: both matched on
+`\s`, `\s` is a GNU extension, macOS ships BSD grep, and BSD treats `\s` as the
+literal letter *s*. Every finding Neptune prints is indented two spaces, so the
+digest would match nothing and the master runner would report "Nothing flagged
+anywhere. Fully clean run." on every machine, forever — Bug 1 reproduced one
+layer up, in the flagship script.
+
+It was a tidy story. It explained a real class of failure, it fit the project's
+stated worst-case, and it was completely wrong.
+
+**The evidence that "confirmed" it.** The claim was tested on a Linux box by
+*substituting* `s*` for `\s*` and showing the substituted pattern matched
+nothing. That demonstrates only: *if `\s` were treated literally, this would
+break.* It never tested whether `\s` is treated literally. The premise was
+assumed on the way in and the conclusion came back out wearing a test result's
+clothes.
+
+**What the target machine actually says:**
+
+```
+$ grep --version
+grep (BSD grep, GNU compatible) 2.6.0-FreeBSD
+
+$ printf '  [FLAG] test\n' | grep -E '^\s*\[FLAG\]'
+  [FLAG] test
+```
+
+Apple's grep is GNU-compatible and supports `\s`. Running `./neptune.sh` produced
+a fully populated digest. The digest had never been broken. Neither had the proxy
+check, nor the `\b` in the MacKeeper team-ID extraction.
+
+**What it cost.** Five commits, a CI gate enforcing a rule that wasn't needed, a
+`CLAUDE.md` constraint describing a platform that doesn't behave that way, and a
+ninety-line postmortem of an event that never happened. All retracted before
+anything was applied to the repository — but only because the diagnosis was
+accompanied by a five-second verification command, and that command was actually
+run instead of skipped as a formality.
+
+**Lessons, in order of importance:**
+
+1. **Verifying a simulation of your premise is not verifying your premise.** This
+   is the whole failure in one line. The test was constructed by assuming the
+   thing under test. It could only ever return "confirmed."
+2. **A diagnosis that explains your worst fear deserves more scrutiny, not less.**
+   "The digest has been silently reporting all-clear this whole time" is exactly
+   the narrative this project is primed to believe, because Bug 1 was real. That
+   made it land as obviously true rather than as a claim needing evidence.
+3. **Run the check on the target, not a model of the target.** Bug 3's lesson was
+   "works on my machine is a threat model failure when your machine isn't the
+   deployment target." This is the same lesson arriving from the opposite
+   direction, and it was in this very file, unread, the whole time.
+4. **Confident, fluent, well-structured reasoning is not evidence.** The wrong
+   diagnosis arrived with a mechanism, a worked example, a proposed fix, a CI
+   gate and a commit message. None of that is verification. It is worth being
+   deliberately more suspicious of a conclusion that arrives fully formed —
+   whether it came from a tool, a colleague, or yourself at 2am.
+
+**What was kept from the episode.** Nothing, in code. The `[[:space:]]` rewrites
+were discarded along with everything else, because keeping a change justified by
+a false premise means carrying a lie in the commit history. The real bugs found
+in the same pass — Bugs 7 and 8 — survived, because those were diagnosed from
+actual output captured on the actual machine.
+
+That is the difference the whole episode is about.
+
+---
+
 ## Cross-cutting practices that came out of these
 
 - **CI as a regression net for exactly these bugs.** The pipeline runs shellcheck,

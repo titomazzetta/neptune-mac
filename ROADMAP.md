@@ -50,11 +50,10 @@ recurring vendor-quirk flags can be acknowledged and hidden), staleness threshol
 report location. Never let config disable a security check silently — an
 acknowledged flag should still be counted, just marked "acknowledged."
 
-### 5. rapportd / ephemeral-port noise suppression
-`sentry.sh` re-flags Apple's `rapportd` (Handoff/Continuity) on every run because
-it grabs new ephemeral ports each boot. Teach the baseline diff to treat
-per-process ephemeral-port churn from known Apple daemons as noise, without
-blinding it to genuinely new listeners.
+### 5. ~~rapportd / ephemeral-port noise suppression~~ — done
+Moved to Done. Turned out to be broader than `rapportd`: on a real machine 7 of
+10 flags were ephemeral churn, Splice included, so the fix collapses the whole
+dynamic range rather than special-casing Apple daemons.
 
 ## Later / exploratory
 
@@ -69,6 +68,14 @@ runner has none of the real persistence/process state). Explore fixture files th
 mock `launchctl`/`lsof`/`system_profiler` output so scan *logic* can be unit-tested
 against known inputs. Non-trivial; high value for regression safety.
 
+### 8. Portfolio polish (job-search value)
+- ~~**Sanitized sample report**~~ — done: [`docs/sample-report.txt`](docs/sample-report.txt).
+- ~~**Keep `docs/DEVLOG.md` current**~~ — ongoing, and current through Bug 8.
+- **Demo recording** — an asciinema cast or GIF of a real `./neptune.sh` run,
+  embedded in the README. Hiring managers skim; seeing it work beats reading about
+  it. Scaffolding and recording instructions are in the README's Demo section;
+  the recording itself needs live system state.
+
 ## Done
 
 - Master runner (`neptune.sh`) with consolidated report + action digest
@@ -77,11 +84,15 @@ against known inputs. Non-trivial; high value for regression safety.
 - bash 3.2 compatibility fixes (empty-array guards, awk-not-case-in-subshell)
 - lsof per-process AND-semantics fix; subshell flag-propagation fix
 
-### 8. Portfolio polish (job-search value)
-- **Demo recording** — an asciinema cast or GIF of a real `./neptune.sh` run,
-  embedded in the README. Hiring managers skim; seeing it work beats reading about
-  it.
-- **Sanitized sample report** — commit an example `neptune_full_report` (scrubbed
-  of hostnames/IPs) to `docs/` so people see the output without running it.
-- **Keep `docs/DEVLOG.md` current** — each real bug found and fixed, added as an
-  entry. It's the most credible artifact in the repo.
+**2026-09 audit pass** — see [`CHANGELOG.md`](CHANGELOG.md) for the full list and
+[`docs/DEVLOG.md`](docs/DEVLOG.md) Bugs 6–8 for the reasoning:
+
+- Code-signing authority read at the wrong verbosity — no signer was ever
+  identified, and the Apple-detection branch was unreachable (Bug 7)
+- Action digest double-counted findings and promoted explanatory prose to
+  findings (Bug 8)
+- Ephemeral listener-port churn suppressed in the baseline (item 5 above)
+- A security check that cannot run now says so instead of passing quietly
+- `uninstall.sh` no longer terminates processes before the confirmation prompt
+- Public-IP lookup made opt-in; `SECURITY.md` added documenting the full
+  threat model, footprint, and what Neptune does *not* detect
