@@ -45,11 +45,28 @@ REPORT="$HOME/Desktop/sentry_report_$(date '+%Y-%m-%d_%H%M').txt"
 mkdir -p "$BASE"
 FLAGS=()
 
+# Structured finding records. When NEPTUNE_FINDINGS is set (neptune.sh sets it),
+# every finding is ALSO appended as a pipe-delimited record so the master runner
+# can score and render it without re-parsing this script's prose. Unset — i.e. a
+# standalone run — record() is a no-op and output is unchanged.
+#
+# Deliberately duplicated into each scan rather than sourced from a shared file:
+# CLAUDE.md requires the scans stay independently runnable, and the existing
+# colour helpers are duplicated the same way.
+SCAN=sentry
+CATEGORY=security          # reset per section below
+record() {
+  [ -n "${NEPTUNE_FINDINGS:-}" ] || return 0
+  printf '%s|%s|%s|%s\n' "$1" "$CATEGORY" "$SCAN" \
+    "$(printf '%s' "$2" | tr '|' '/' | tr -d '\n')" >> "$NEPTUNE_FINDINGS"
+}
+
 out()     { echo "$@" | tee -a "$REPORT"; }
 section() { out ""; out "${BOLD}${CYN}== $* ==${RST}"; }
 ok()      { out "  ${GRN}[ok]${RST} $*"; }
-warn()    { out "  ${YEL}[!!]${RST} $*"; }
-flag()    { FLAGS+=("$*"); out "  ${RED}[FLAG]${RST} $*"; }
+warn()    { out "  ${YEL}[!!]${RST} $*"; record notice "$*"; }
+flag()    { FLAGS+=("$*"); out "  ${RED}[FLAG]${RST} $*"; record attention "$*"; }
+unknown() { out "  ${YEL}[!!]${RST} $*"; record unknown "$*"; }
 
 REBASE=false
 [ "${1:-}" = "--rebaseline" ] && REBASE=true
@@ -80,6 +97,7 @@ sig() {
 ############################################################
 # 1. CHANGE DETECTION (HIDS-lite)
 ############################################################
+CATEGORY=security
 section "1. Change detection vs baseline"
 
 snapshot() {
@@ -160,6 +178,7 @@ fi
 ############################################################
 # 2. PROCESS -> NETWORK MAP
 ############################################################
+CATEGORY=security
 section "2. Process -> network map"
 
 out "  ${BOLD}Processes with network activity (listeners and outbound):${RST}"
@@ -187,6 +206,7 @@ done < <(sudo lsof -i -P -n 2>/dev/null | awk 'NR>1 {print $1, $2}' | sort -u)
 ############################################################
 # 3. NETWORK HEALTH
 ############################################################
+CATEGORY=network
 section "3. Network health"
 
 GATEWAY=$(route -n get default 2>/dev/null | awk '/gateway/{print $2}')
@@ -227,6 +247,7 @@ fi
 ############################################################
 # 4. APP USAGE & STALENESS
 ############################################################
+CATEGORY=bloat
 section "4. App usage and staleness"
 
 NOW=$(date +%s)

@@ -21,9 +21,19 @@ CYN=$(tput setaf 6 2>/dev/null || true)
 RST=$(tput sgr0 2>/dev/null || true)
 
 section() { echo; echo "${BOLD}${CYN}== $* ==${RST}"; }
+# Structured finding records — see sentry.sh for the rationale. No-op unless
+# neptune.sh sets NEPTUNE_FINDINGS, so a standalone run is unchanged.
+SCAN=network
+CATEGORY=network
+record() {
+  [ -n "${NEPTUNE_FINDINGS:-}" ] || return 0
+  printf '%s|%s|%s|%s\n' "$1" "$CATEGORY" "$SCAN" \
+    "$(printf '%s' "$2" | tr '|' '/' | tr -d '\n')" >> "$NEPTUNE_FINDINGS"
+}
+
 ok()   { echo "  ${GRN}[ok]${RST} $*"; }
-warn() { echo "  ${YEL}[!!]${RST} $*"; }
-bad()  { echo "  ${RED}[XX]${RST} $*"; }
+warn() { echo "  ${YEL}[!!]${RST} $*"; record notice "$*"; }
+bad()  { echo "  ${RED}[XX]${RST} $*"; record attention "$*"; }
 
 PUBLIC_IP=false
 [ "${1:-}" = "--public-ip" ] && PUBLIC_IP=true

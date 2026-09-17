@@ -9,7 +9,15 @@
 # ready to copy-paste in full for review. Also prints a condensed digest
 # (every FLAG / [!!] / [XX] line) at the end so the action items are on top.
 #
-# Usage:   ./neptune.sh
+# Usage:
+#   ./neptune.sh                  run the suite; print a verdict and scores
+#   ./neptune.sh --json           also write structured findings as JSON
+#   ./neptune.sh --json --sanitize  ...with host/user/IPs/MACs replaced, so the
+#                                 file can be shared or pasted into an LLM
+#                                 without handing over a map of your machine
+#   ./neptune.sh --acknowledge N  mark finding N a known-good vendor quirk; it
+#                                 stays listed and counted but stops deducting
+#
 # Note:    read-only throughout (no --upgrade, no deletions).
 #          uninstall.sh and remove_mackeeper.sh are never run by this script.
 
@@ -18,13 +26,42 @@ set -u
 BOLD=$(tput bold 2>/dev/null || true)
 CYN=$(tput setaf 6 2>/dev/null || true)
 GRN=$(tput setaf 2 2>/dev/null || true)
+YEL=$(tput setaf 3 2>/dev/null || true)
+RED=$(tput setaf 1 2>/dev/null || true)
 RST=$(tput sgr0 2>/dev/null || true)
+
+JSON_OUT=false
+SANITIZE_OUT=false
+ACK_ARG=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --json)        JSON_OUT=true ;;
+    --sanitize)    SANITIZE_OUT=true ;;
+    --acknowledge) shift; ACK_ARG="${1:-}" ;;
+    -h|--help)     sed -n '3,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *)             echo "Unknown option: $1" >&2; exit 1 ;;
+  esac
+  shift
+done
+case "$ACK_ARG" in
+  ''|*[!0-9,]*) [ -z "$ACK_ARG" ] || { echo "--acknowledge takes finding numbers, e.g. 5 or 5,6,7" >&2; exit 1; } ;;
+esac
+$SANITIZE_OUT && ! $JSON_OUT && { echo "--sanitize only applies with --json" >&2; exit 1; }
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
 STAMP=$(date '+%Y-%m-%d_%H%M')
 REPORT="$HOME/Desktop/neptune_full_report_${STAMP}.txt"
+JSON_PATH="$HOME/Desktop/neptune_findings_${STAMP}.json"
+NEPTUNE_HOME="$HOME/.neptune"
+mkdir -p "$NEPTUNE_HOME"
 TMP=$(mktemp -d /tmp/neptune.XXXXXX)
 trap 'rm -rf "$TMP"' EXIT
+
+# Scans append structured records here. Exported so each child sees it; unset
+# in a standalone run, where record() is a no-op.
+FINDINGS="$TMP/findings.txt"
+: > "$FINDINGS"
+export NEPTUNE_FINDINGS="$FINDINGS"
 
 if [ "$(id -u)" -eq 0 ]; then
   echo "Run as your normal user, not with sudo."; exit 1
@@ -78,53 +115,243 @@ run_script "audit_system.sh"  "SYSTEM AUDIT (resources, persistence, disk)"
 run_script "check_updates.sh" "UPDATE SCAN (macOS, brew, App Store, self-updaters)"
 
 ############################################################
-# Digest: pull every actionable line to the top of the file
+# Score, verdict, and findings
 ############################################################
-DIGEST="$TMP/digest.txt"
-# Collect only PREFIXED finding lines. The numbered lines ('1. ', '2. ') that the
-# per-scan summaries print were matched here too, but they are restatements of
-# the same [FLAG] lines — so every finding landed in the digest twice, and
-# `sort -u` then interleaved two scans' numbering as 1., 10., 2., 3.
 #
-# Dedupe with awk rather than `sort -u` so each scan's findings stay in the order
-# that scan printed them (the glob groups by scan). Alphabetical order across
-# everything told the reader nothing and actively scrambled the numbered lines.
-grep -hE '^[[:space:]]*(\[FLAG\]|\[!!\]|\[XX\])' "$TMP"/*.txt 2>/dev/null \
-  | sed 's/^[[:space:]]*//' | awk '!seen[$0]++' > "$DIGEST"
+# Scans append structured records to $NEPTUNE_FINDINGS as:
+#     severity|category|scan|title
+# severity ∈ attention | notice | unknown        (see each scan's record())
+# category ∈ security | network | bloat | maintenance
+#
+# Everything below renders from those records. Nothing here re-parses the
+# scans' prose — that text-grepping step is what made the old digest count one
+# problem seven times and every finding twice (DEVLOG Bug 8).
 
-# `grep -c` PRINTS 0 and EXITS 1 when nothing matches, so `|| echo 0` appended a
-# SECOND zero and a clean run rendered as "Digest (0\n0 flag/error line(s))".
-# Take grep's count as-is; substitute only when the command produced no output
-# at all (e.g. the digest file is missing).
-FLAGCOUNT=$(grep -cE '^\[FLAG\]|^\[XX\]' "$DIGEST" 2>/dev/null)
-[ -n "$FLAGCOUNT" ] || FLAGCOUNT=0
+ALLOW="$NEPTUNE_HOME/allow"
+[ -f "$ALLOW" ] || : > "$ALLOW"
 
-# Prepend the digest to the report
+# Attach a stable key to each finding and mark the acknowledged ones.
+# The key is the title with digits collapsed to '#', so it survives the PIDs,
+# ports and version numbers that change every run — otherwise acknowledging a
+# finding once would not match it again tomorrow.
+SCORED="$TMP/scored.txt"
+awk -F'|' -v allowfile="$ALLOW" '
+  BEGIN { while ((getline l < allowfile) > 0) if (l != "" && l !~ /^#/) allow[l] = 1 }
+  NF >= 4 {
+    sev = $1; cat = $2; scan = $3; title = $4
+    for (i = 5; i <= NF; i++) title = title "|" $i
+    key = tolower(title)
+    gsub(/[0-9]+/, "#", key); gsub(/[ \t]+/, " ", key)
+    sub(/^ /, "", key); sub(/ $/, "", key)
+    if (length(key) > 90) key = substr(key, 1, 90)
+    printf "%s|%s|%s|%s|%s|%s\n", sev, cat, scan, title, key, (key in allow) ? 1 : 0
+  }
+' "$FINDINGS" 2>/dev/null | awk -F'|' '!seen[$1 "|" $2 "|" $4]++' > "$SCORED"
+
+# Per-category score: start at 100, deduct per unacknowledged finding, floor at 0.
+# Every deduction traces to a finding printed below — a score whose arithmetic
+# the reader cannot follow is decoration, not information.
+SCORES="$TMP/scores.txt"
+awk -F'|' '
+  BEGIN { n = split("security network bloat maintenance", C, " ")
+          for (i = 1; i <= n; i++) score[C[i]] = 100 }
+  {
+    sev = $1; cat = $2; acked = $6
+    if (!(cat in score)) { score[cat] = 100; C[++n] = cat }
+    if (acked == 1) { acks[cat]++; total_ack++; next }
+    counts[sev]++
+    # First issue of a severity in a category costs full weight; each repeat
+    # costs about a third. Nine unsigned launch items are usually one habit
+    # (a vendor that ships unsigned helpers), not nine independent problems —
+    # and a flat per-finding deduction floors the score at 0, which stops
+    # distinguishing "several vendor quirks" from "actually compromised".
+    seen[cat "|" sev]++
+    if (seen[cat "|" sev] == 1)
+      w = (sev == "attention") ? 12 : (sev == "unknown") ? 8 : 4
+    else
+      w = (sev == "attention") ?  4 : (sev == "unknown") ? 3 : 1
+    score[cat] -= w
+  }
+  END {
+    for (i = 1; i <= n; i++) {
+      c = C[i]; if (score[c] < 0) score[c] = 0
+      printf "score|%s|%d|%d\n", c, score[c], acks[c] + 0
+    }
+    printf "count|attention|%d\n", counts["attention"] + 0
+    printf "count|notice|%d\n",    counts["notice"] + 0
+    printf "count|unknown|%d\n",   counts["unknown"] + 0
+    printf "count|acknowledged|%d\n", total_ack + 0
+  }
+' "$SCORED" > "$SCORES"
+
+getcount() { awk -F'|' -v k="$1" '$1=="count" && $2==k {print $3}' "$SCORES"; }
+N_ATTENTION=$(getcount attention); N_NOTICE=$(getcount notice)
+N_UNKNOWN=$(getcount unknown);     N_ACK=$(getcount acknowledged)
+
+# Verdict. Ordered worst-first, and "couldn't check" outranks "minor" on
+# purpose: an un-run check is an unknown, not a pass.
+if   [ "${N_ATTENTION:-0}" -gt 0 ]; then VERDICT="NEEDS ATTENTION"; VKEY=needs_attention; VCOL="$RED"
+elif [ "${N_UNKNOWN:-0}"   -gt 0 ]; then VERDICT="HEALTHY — but some checks could not run"; VKEY=incomplete; VCOL="$YEL"
+elif [ "${N_NOTICE:-0}"    -gt 0 ]; then VERDICT="HEALTHY — minor items"; VKEY=healthy_minor; VCOL="$GRN"
+else                                     VERDICT="HEALTHY"; VKEY=healthy; VCOL="$GRN"
+fi
+
+render_verdict() {
+  echo "================================================================"
+  echo "  $VERDICT"
+  echo "================================================================"
+  echo
+  awk -F'|' '$1=="score" {
+    bar = ""
+    filled = int($3 / 10)
+    for (i = 0; i < 10; i++) bar = bar (i < filled ? "#" : ".")
+    printf "  %-12s %3d/100  [%s]%s\n", $2, $3, bar,
+           ($4 > 0 ? "  (" $4 " acknowledged)" : "")
+  }' "$SCORES"
+  echo
+  printf '  %s attention · %s minor · %s could not run · %s acknowledged\n' \
+    "${N_ATTENTION:-0}" "${N_NOTICE:-0}" "${N_UNKNOWN:-0}" "${N_ACK:-0}"
+
+  # ONE number sequence across all three sections. Numbering per section made
+  # `--acknowledge 3` ambiguous, and the lookup indexed a different list than
+  # the one on screen — so the number you typed was not the finding you read.
+  NUM=0
+  for SEV in attention unknown notice; do
+    case "$SEV" in
+      attention) HEAD="NEEDS ATTENTION" ;;
+      unknown)   HEAD="COULD NOT BE CHECKED  (treat as unknown, not clean)" ;;
+      notice)    HEAD="MINOR" ;;
+    esac
+    if awk -F'|' -v s="$SEV" '$1==s && $6==0 {found=1} END{exit !found}' "$SCORED"; then
+      echo; echo "  $HEAD"
+      while IFS='|' read -r _sev _cat _scan _title _rest; do
+        NUM=$((NUM + 1))
+        printf '   %2d. [%s] %s\n' "$NUM" "$_cat" "$_title"
+      done <<EOF_F
+$(awk -F'|' -v s="$SEV" '$1==s && $6==0' "$SCORED")
+EOF_F
+    fi
+  done
+
+  if [ "${N_ACK:-0}" -gt 0 ]; then
+    echo; echo "  ACKNOWLEDGED — known-good on this machine, still counted"
+    awk -F'|' '$6==1 {printf "   · [%s] %s\n", $2, $4}' "$SCORED" | head -8
+    [ "${N_ACK:-0}" -gt 8 ] && echo "   · ... and $(( N_ACK - 8 )) more"
+    echo "   (edit $ALLOW to change)"
+  fi
+
+  if [ "${N_ATTENTION:-0}" -gt 0 ] || [ "${N_NOTICE:-0}" -gt 0 ]; then
+    echo
+    echo "  Recurring vendor quirk rather than a problem? Acknowledge it:"
+    echo "      ./neptune.sh --acknowledge <n>      (number from the list above)"
+  fi
+  echo "================================================================"
+}
+
+# JSON. python3 ships with macOS, so no brew dependency (ROADMAP #1), and it
+# handles escaping correctly — hand-rolled JSON from shell is how you emit a
+# file that silently fails to parse.
+render_json() {
+  SANITIZE=$1 python3 - "$SCORED" "$SCORES" "$VKEY" <<'PY'
+import json, os, re, subprocess, sys, datetime
+scored, scores, vkey = sys.argv[1], sys.argv[2], sys.argv[3]
+san = os.environ.get("SANITIZE") == "1"
+host = subprocess.run(["hostname"], capture_output=True, text=True).stdout.strip()
+user = os.environ.get("USER", "")
+
+def clean(t):
+    if not san: return t
+    if host: t = t.replace(host, "example-mac").replace(host.split(".")[0], "example-mac")
+    if user: t = t.replace(user, "exampleuser")
+    t = re.sub(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", "0.0.0.0", t)
+    t = re.sub(r"\b(?:[0-9a-fA-F]{1,2}:){5}[0-9a-fA-F]{1,2}\b", "xx:xx:xx:xx:xx:xx", t)
+    return t
+
+sc, ack, counts = {}, {}, {}
+for line in open(scores):
+    f = line.rstrip("\n").split("|")
+    if f[0] == "score": sc[f[1]] = int(f[2]); ack[f[1]] = int(f[3])
+    elif f[0] == "count": counts[f[1]] = int(f[2])
+
+findings = []
+for line in open(scored):
+    f = line.rstrip("\n").split("|")
+    if len(f) < 6: continue
+    findings.append({"severity": f[0], "category": f[1], "scan": f[2],
+                     "title": clean(f[3]), "key": f[4], "acknowledged": f[5] == "1"})
+
+print(json.dumps({
+    "neptune": {"schema": 1,
+                "generated": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
+                "host": clean(host) if san else host,
+                "sanitized": san},
+    "verdict": vkey,
+    "scores": sc,
+    "acknowledged_by_category": ack,
+    "counts": counts,
+    "findings": findings,
+}, indent=2))
+PY
+}
+
+# --acknowledge N[,N...]: mark findings as known-good vendor quirks.
+#
+# Every number is resolved against THIS run's listing BEFORE anything is
+# written. Acknowledging one finding removes it from the unacknowledged list and
+# renumbers the rest, so resolving them one at a time means the second number
+# you typed refers to a different finding than the one you read — silently
+# suppressing the wrong alert, which is the failure this whole project is about.
+if [ -n "$ACK_ARG" ]; then
+  ORDER="$TMP/order.txt"
+  { awk -F'|' '$1=="attention" && $6==0' "$SCORED"
+    awk -F'|' '$1=="unknown"   && $6==0' "$SCORED"
+    awk -F'|' '$1=="notice"    && $6==0' "$SCORED"
+  } > "$ORDER"
+  AVAIL=$(wc -l < "$ORDER" | xargs)
+  RESOLVED="$TMP/resolved.txt"; : > "$RESOLVED"
+  BAD=""
+  for N in $(printf '%s' "$ACK_ARG" | tr ',' ' '); do
+    LINE=$(sed -n "${N}p" "$ORDER")
+    [ -n "$LINE" ] && printf '%s\n' "$LINE" >> "$RESOLVED" || BAD="$BAD $N"
+  done
+  if [ -n "$BAD" ]; then
+    echo "No finding numbered:$BAD in this run (1-${AVAIL} available)." >&2
+    echo "Numbers come from the listing a plain ./neptune.sh run prints." >&2
+    exit 1
+  fi
+  while IFS='|' read -r _SEV _CAT _SCAN TITLE KEY _ACK; do
+    printf '%s\n' "$KEY" >> "$ALLOW"
+    echo "Acknowledged: $TITLE"
+  done < "$RESOLVED"
+  echo
+  echo "Recorded in $ALLOW."
+  echo "These stay listed and counted on every run — they just stop deducting"
+  echo "from the score. Delete the line to un-acknowledge."
+  exit 0
+fi
+
+############################################################
+# Report file: verdict on top, full scan output beneath
+############################################################
 FINAL="$TMP/final.txt"
 {
   head -4 "$REPORT"
   echo
-  echo "================================================================"
-  echo "  ACTION DIGEST — every flag and warning from all five scans"
-  echo "================================================================"
-  if [ -s "$DIGEST" ]; then
-    cat "$DIGEST"
-  else
-    echo "  Nothing flagged anywhere. Fully clean run."
-  fi
-  echo "================================================================"
+  render_verdict
   tail -n +5 "$REPORT"
 } > "$FINAL"
 mv "$FINAL" "$REPORT"
 
-echo "${BOLD}${GRN}Suite complete.${RST}"
-echo
-echo "${BOLD}Digest (${FLAGCOUNT} flag/error line(s)):${RST}"
-if [ -s "$DIGEST" ]; then
-  sed 's/^/  /' "$DIGEST"
-else
-  echo "  Nothing flagged anywhere. Fully clean run."
+if $JSON_OUT; then
+  render_json "$( $SANITIZE_OUT && echo 1 || echo 0 )" > "$JSON_PATH"
+  echo
+  echo "${BOLD}${GRN}Suite complete.${RST}"
+  echo "JSON findings: $JSON_PATH$( $SANITIZE_OUT && echo '   (sanitized)' )"
 fi
+
 echo
-echo "${BOLD}Full combined report:${RST} $REPORT"
-echo "Open it, select all, copy, and paste for a complete review."
+echo "${BOLD}${VCOL}${VERDICT}${RST}"
+echo
+render_verdict | tail -n +4
+echo
+echo "${BOLD}Full report:${RST} $REPORT"

@@ -33,16 +33,28 @@ FLAGS=()
 # Print to screen AND report file
 out() { echo "$@" | tee -a "$REPORT"; }
 section() { out ""; out "== $* =="; }
+# Structured finding records — see sentry.sh for the rationale. No-op unless
+# neptune.sh sets NEPTUNE_FINDINGS, so a standalone run is unchanged.
+SCAN=redflag
+CATEGORY=security
+record() {
+  [ -n "${NEPTUNE_FINDINGS:-}" ] || return 0
+  printf '%s|%s|%s|%s\n' "$1" "$CATEGORY" "$SCAN" \
+    "$(printf '%s' "$2" | tr '|' '/' | tr -d '\n')" >> "$NEPTUNE_FINDINGS"
+}
+
 flag() {
   FLAGS+=("$*")
   out "  ${RED}[FLAG]${RST} $*"
+  record attention "$*"
 }
 ok()   { out "  ${GRN}[ok]${RST} $*"; }
 note() { out "  $*"; }
+unknown() { out "  ${YEL}[!!]${RST} $*"; record unknown "$*"; }
 # [!!] for "this is not a red flag, but you should see it" — including a check
 # that could NOT be performed. neptune.sh greps [!!] into the action digest, so
 # unlike note() this cannot be scrolled past silently.
-warn() { out "  ${YEL}[!!]${RST} $*"; }
+warn() { out "  ${YEL}[!!]${RST} $*"; record notice "$*"; }
 
 if [ "$(id -u)" -eq 0 ]; then
   echo "Run as your normal user, not with sudo."; exit 1
@@ -112,7 +124,7 @@ fi
 case "$FW_STATE" in
   on)  ok "Application firewall: enabled" ;;
   off) warn "Application firewall is OFF — a common default, but worth enabling on any machine that joins public Wi-Fi" ;;
-  *)   warn "Application firewall state COULD NOT BE DETERMINED (socketfilterfw and com.apple.alf both unreadable) — this check did NOT run; the baseline below is incomplete" ;;
+  *)   unknown "Application firewall state COULD NOT BE DETERMINED (socketfilterfw and com.apple.alf both unreadable) — this check did NOT run; the baseline below is incomplete" ;;
 esac
 
 XP=$(defaults read /Library/Apple/System/Library/CoreServices/XProtect.bundle/Contents/Info.plist CFBundleShortVersionString 2>/dev/null || echo "?")
