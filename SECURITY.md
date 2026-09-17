@@ -82,7 +82,8 @@ Neptune installs nothing. There is no launch agent, no daemon, no login item, no
 cron entry, no menu-bar process, nothing scheduled. It runs when you run it and
 then it is gone.
 
-It writes exactly two kinds of file:
+It writes three kinds of file — reports, its own small state, and (only when
+you ask for it) structured findings:
 
 | Path | What | Written by |
 |---|---|---|
@@ -92,19 +93,28 @@ It writes exactly two kinds of file:
 | `~/.sentry/baseline.txt` | known-good snapshot | `sentry.sh` |
 | `~/.sentry/current.txt` | latest snapshot | `sentry.sh` |
 | `~/.sentry/format` | baseline format version | `sentry.sh` |
+| `~/.neptune/allow` | findings you acknowledged as known-good | `neptune.sh --acknowledge` |
+| `~/Desktop/neptune_findings_*.json` | structured findings | `neptune.sh --json` |
 
 **Reports contain sensitive information about your machine**: hostname, your
 username in file paths, LAN addresses, your installed application inventory, and
 every listening port. Treat a report like a system inventory, because that is what
 it is. `docs/sample-report.txt` shows the shape of one with those values replaced.
 
+The same applies to `--json` output, which is likely to get pasted somewhere —
+into an issue, a chat window, an LLM. Use `--json --sanitize` for anything
+leaving the machine: it replaces hostname, username, IP addresses and MAC
+addresses, so you share the findings without the fingerprint. Neptune does not
+upload either file anywhere; moving it is your decision and your action.
+
 ### Removing Neptune completely
 
 ```bash
-rm -rf ~/.sentry                      # the only state it keeps
+rm -rf ~/.sentry ~/.neptune           # the only state it keeps
 rm -f ~/Desktop/neptune_full_report_*.txt \
       ~/Desktop/sentry_report_*.txt \
-      ~/Desktop/redflag_report_*.txt  # your reports
+      ~/Desktop/redflag_report_*.txt \
+      ~/Desktop/neptune_findings_*.json   # your reports
 rm -rf /path/to/neptune-mac           # the repo itself
 ```
 

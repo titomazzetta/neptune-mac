@@ -55,6 +55,21 @@ Moved to Done. Turned out to be broader than `rapportd`: on a real machine 7 of
 10 flags were ephemeral churn, Splice included, so the fix collapses the whole
 dynamic range rather than special-casing Apple daemons.
 
+## Not planned
+
+Removed from the roadmap deliberately, so they stop reading as debt:
+
+- **Interactive orchestrator with keep/delete/skip** (was #2). Substantial work
+  and real risk for a tool whose value is the diagnosis, not the doing. The
+  destructive paths already exist, are confirmed, and are better entered
+  knowingly. `--acknowledge` covers the "I've seen this, stop counting it" case
+  that motivated most of it.
+- **Bundled local-model advisor** (was #3). `--json` plus `docs/advisor.md` is
+  the decoupled version and it works with any model. Shipping an integration
+  means shipping a dependency and a key-handling story, and the value over
+  "paste this file" is small.
+- **Windows sibling** (was #6). The concepts map; nothing else does.
+
 ## Later / exploratory
 
 ### 6. Windows sibling

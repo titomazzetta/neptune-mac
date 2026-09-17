@@ -42,7 +42,7 @@ can audit yourself.
 
 | Script | What it does |
 |---|---|
-| `neptune.sh` | **Master runner.** Runs all scans, produces one combined report with an action digest on top. |
+| `neptune.sh` | **Master runner.** Runs all scans, then gives a verdict, per-category health scores, and one combined report. `--json` for structured findings. |
 | `sentry.sh` | Change detection vs a saved baseline (tripwire-style), process→network map, app staleness. |
 | `redflag_scan.sh` | Deep audit: security baseline, all persistence with code-signing, cron/hooks, listeners, traffic interception, browser extensions. |
 | `audit_system.sh` | Top resource consumers, persistence with signing, system/kernel extensions, disk-space hogs. |
@@ -60,7 +60,7 @@ verify all of it yourself before running anything, is in
 
 | Script | Elevates | Writes | Leaves your network |
 |---|---|---|---|
-| `neptune.sh` | prompts once, shared with children | report to Desktop | — |
+| `neptune.sh` | prompts once, shared with children | report to Desktop; `~/.neptune/allow`; JSON with `--json` | — |
 | `sentry.sh` | `lsof` | report to Desktop, baseline in `~/.sentry` | ping, DNS, traceroute |
 | `redflag_scan.sh` | `lsof`, root crontab, profiles | report to Desktop | — |
 | `audit_system.sh` | `du` on system paths | nothing | — |
@@ -72,7 +72,8 @@ verify all of it yourself before running anything, is in
 
 No script runs wholesale as root — every one refuses to start under `sudo` and
 elevates only specific commands. Nothing is installed, scheduled, or left
-running: the entire footprint is `~/.sentry` plus the reports on your Desktop.
+running: the entire footprint is `~/.sentry`, `~/.neptune`, and the reports on
+your Desktop. `SECURITY.md` has the removal commands.
 
 ## Quick start
 
@@ -82,7 +83,42 @@ cd neptune-mac/scripts
 chmod +x *.sh
 xattr -d com.apple.quarantine *.sh 2>/dev/null   # if macOS quarantines them
 
-./neptune.sh          # run the full read-only suite, get one report
+./neptune.sh          # run the full read-only suite
+```
+
+You get a verdict first, then the detail:
+
+```
+  HEALTHY — but some checks could not run
+
+  security      64/100  [######....]  (4 acknowledged)
+  network       80/100  [########..]
+  bloat        100/100  [##########]
+  maintenance   95/100  [#########.]
+
+  2 attention · 3 minor · 1 could not run · 4 acknowledged
+
+  NEEDS ATTENTION
+    1. [network] Second private router in path — double NAT
+    2. [security] Unsigned privileged helper (runs as root): com.docker.socket
+
+  COULD NOT BE CHECKED  (treat as unknown, not clean)
+    3. [security] Application firewall state could not be determined
+```
+
+Legitimate vendor software routinely fails code-signing checks. Tell Neptune
+once and it stops counting against you:
+
+```bash
+./neptune.sh --acknowledge 2        # or 2,5,7 — resolved before anything is written
+```
+
+Acknowledged findings stay listed and stay counted; they just stop deducting.
+Nothing is ever silently hidden.
+
+```bash
+./neptune.sh --json                 # structured findings alongside the report
+./neptune.sh --json --sanitize      # ...with host, user, IPs and MACs replaced
 ```
 
 Reports are written to your Desktop, colors stripped, ready to read or share.

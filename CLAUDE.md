@@ -81,7 +81,7 @@ CLAUDE.md        this file
 
 | Script | Role | Mutates? |
 |---|---|---|
-| `neptune.sh` | Master runner — runs all scans, one combined report | no |
+| `neptune.sh` | Master runner — verdict, scores, `--json`, one combined report | `~/.neptune/allow` with `--acknowledge` |
 | `sentry.sh` | Baseline diff, process→network map, staleness | baseline files only |
 | `redflag_scan.sh` | Deep audit: persistence, listeners, interception | no |
 | `audit_system.sh` | Resources, persistence, disk | no |
@@ -95,10 +95,15 @@ CLAUDE.md        this file
 
 - **Every change must pass `shellcheck` and `bash -n`.** Run `tests/lint.sh`
   locally before committing; CI enforces it.
-- **Match the existing style.** Color helpers (`ok`/`warn`/`flag`), section
-  headers, the `[ok]/[!!]/[FLAG]/[XX]` prefixes are consistent across scripts —
-  keep them. A finding-line prefix is load-bearing: `neptune.sh` greps for
-  `[FLAG]`/`[XX]` to build its digest.
+- **Match the existing style.** Colour helpers (`ok`/`warn`/`flag`/`unknown`),
+  section headers, and the `[ok]/[!!]/[FLAG]/[XX]` prefixes are consistent across
+  scripts — keep them.
+- **Findings are recorded, not scraped.** Each scan's `flag`/`warn`/`unknown`
+  helper also calls `record <severity> "<title>"`, which appends
+  `severity|category|scan|title` to `$NEPTUNE_FINDINGS` when the master runner
+  sets it. Set `CATEGORY` at the top of each section. If you add a helper that
+  prints a finding, make it record one too — a finding that prints but does not
+  record is invisible to the score and the JSON.
 - **Never widen a destructive glob without tracing it.** The `rm -rf` targets in
   the uninstallers are built from discovery output; a careless glob is how you
   delete someone's home folder. Show, confirm, then delete.
@@ -107,7 +112,14 @@ CLAUDE.md        this file
 
 ## Current priorities
 
-See `ROADMAP.md`. The headline next feature is **structured `--json` output**,
-which unlocks the AI-advisor loop without giving any agent the keys to run
-destructive commands unsupervised. That decoupling is deliberate — read the
-roadmap's rationale before building it.
+See `ROADMAP.md`. The verdict layer, category scores, `--json` and the
+acknowledge list have shipped — the findings model they rest on is the thing to
+understand before changing any scan: scans emit `severity|category|scan|title`
+records and every summary renders from those. Do not add a code path that
+re-derives findings by parsing printed output; that is DEVLOG Bug 8.
+
+Next is **fixture tests for the parsing layer**. Every bug in the 2026-09 audit
+was findable from captured `codesign` / `lsof` / scan-output strings with no
+macOS involved, and the structured findings make assertions trivial. The
+orchestrator, the local-model advisor and a Windows sibling are explicitly NOT
+planned — see `ROADMAP.md`.

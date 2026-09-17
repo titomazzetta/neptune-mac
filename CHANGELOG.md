@@ -9,6 +9,37 @@ explains each in full — symptom, root cause, fix, and what was learned.
 
 ---
 
+## Verdict layer — 2026-09
+
+Neptune reported an expert's findings list; a real run on a clean machine
+produced ~18 of them, nearly all known vendor quirks. `PHILOSOPHY.md` says a
+scanner you learn to ignore is worse than none, so the tool was failing its own
+test. It now answers "is this machine OK?" before it answers "here is everything
+I found".
+
+### Added
+- **Verdict and per-category health scores** — security, network, bloat,
+  maintenance, each out of 100. Every deduction traces to a listed finding.
+  Repeats of the same kind of issue cost about a third of the first, because
+  nine unsigned launch items are usually one vendor habit, not nine problems.
+- **`--acknowledge N[,N...]`** — mark known-good vendor quirks. They stay listed
+  and counted; they only stop deducting. Stored in `~/.neptune/allow`, keyed so
+  the entry survives the PIDs, ports and versions that change every run. All
+  numbers resolve against the current listing before anything is written, since
+  acknowledging one finding renumbers the rest.
+- **`--json`** and **`--json --sanitize`** — structured findings, optionally
+  with hostname, username, IP and MAC addresses replaced, so a findings file can
+  be shared or pasted into a model without handing over a map of the machine.
+  `docs/advisor.md` covers that workflow, including why the model should
+  recommend `./uninstall.sh <app>` rather than novel shell you paste blind.
+- Structured finding records internally: scans emit
+  `severity|category|scan|title` and everything renders from those. Nothing
+  re-parses the scans' prose — the step that made one problem count as seven.
+  Standalone runs are unaffected; the recorder is a no-op unless the master
+  runner sets it.
+
+---
+
 ## Audit pass — 2026-09
 
 The first systematic review of the whole suite against live output from a real
