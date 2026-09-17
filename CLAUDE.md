@@ -3,6 +3,26 @@
 You are working on **Neptune**, a suite of macOS maintenance and security-audit
 shell scripts. This file is your operating manual. Read it fully before changing code.
 
+## Background & philosophy (read this for judgment calls)
+
+Neptune was built by removing its opposite — a commercial "cleaner" (MacKeeper)
+that installed resident daemons, an endpoint-security extension, and traffic
+filters that taxed the machine while being hard to remove. Neptune does the
+*legitimate* jobs those products fake (persistence auditing, staleness, updates,
+network health) the honest way: on-demand, transparent, read-only by default,
+human-in-the-loop.
+
+It is also the author's applied-security portfolio piece (built during a
+cybersecurity job search), so the code should read like the work of someone who
+thinks about failure modes, blast radius, and trust — because that judgment is the
+real deliverable.
+
+**The heuristic for any ambiguous decision:** choose the option a
+privacy-respecting, no-BS security engineer would choose — never the option a
+"cleaner" product would. That single test resolves most design questions. When in
+doubt, prefer: read-only over mutating, explicit over silent, calibrated over
+alarmist, portable over clever. See `docs/PHILOSOPHY.md` for the full vision.
+
 ## What Neptune is
 
 A collection of independent, on-demand bash scripts that audit and clean a Mac.

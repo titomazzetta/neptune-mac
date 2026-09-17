@@ -8,6 +8,12 @@ built as the deliberate opposite of the "cleaner" and "antivirus" apps it was
 originally written to remove. Everything is transparent, runs only when you invoke
 it, and is read-only unless it very explicitly tells you otherwise and asks first.
 
+> **Note:** Neptune is also a portfolio project — an applied demonstration of
+> security engineering, systems, and network-defense skills. For the full vision,
+> the design philosophy, and what it demonstrates, see
+> [`docs/PHILOSOPHY.md`](docs/PHILOSOPHY.md). For the honest engineering story —
+> the bugs found and fixed during development — see [`docs/DEVLOG.md`](docs/DEVLOG.md).
+
 ## Why it exists
 
 Commercial Mac "cleaners" tend to install background daemons, kernel/endpoint
@@ -53,6 +59,8 @@ xattr -d com.apple.quarantine *.sh 2>/dev/null   # if macOS quarantines them
 ```
 
 Reports are written to your Desktop, colors stripped, ready to read or share.
+
+See [`docs/SETUP.md`](docs/SETUP.md) for full setup, contributor, and push notes.
 
 **Do not run these with `sudo`.** They prompt for elevation only where needed.
 

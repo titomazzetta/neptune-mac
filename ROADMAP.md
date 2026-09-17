@@ -76,3 +76,12 @@ against known inputs. Non-trivial; high value for regression safety.
 - Deep network check (`netcheck_plus.sh`)
 - bash 3.2 compatibility fixes (empty-array guards, awk-not-case-in-subshell)
 - lsof per-process AND-semantics fix; subshell flag-propagation fix
+
+### 8. Portfolio polish (job-search value)
+- **Demo recording** — an asciinema cast or GIF of a real `./neptune.sh` run,
+  embedded in the README. Hiring managers skim; seeing it work beats reading about
+  it.
+- **Sanitized sample report** — commit an example `neptune_full_report` (scrubbed
+  of hostnames/IPs) to `docs/` so people see the output without running it.
+- **Keep `docs/DEVLOG.md` current** — each real bug found and fixed, added as an
+  entry. It's the most credible artifact in the repo.
