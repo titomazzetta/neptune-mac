@@ -5,9 +5,9 @@
 # Runs, in order:  sentry.sh  ->  redflag_scan.sh  ->  network_check.sh
 #                  ->  audit_system.sh  ->  check_updates.sh (scan only)
 #
-# Output: a single plain-text file on the Desktop with ANSI colors stripped,
-# ready to copy-paste in full for review. Also prints a condensed digest
-# (every FLAG / [!!] / [XX] line) at the end so the action items are on top.
+# Output: a verdict and per-category health scores on screen, plus one combined
+# plain-text report on the Desktop with ANSI colors stripped, ready to read or
+# share. Optionally structured findings as JSON.
 #
 # Usage:
 #   ./neptune.sh                  run the suite; print a verdict and scores
@@ -38,7 +38,24 @@ while [ $# -gt 0 ]; do
     --json)        JSON_OUT=true ;;
     --sanitize)    SANITIZE_OUT=true ;;
     --acknowledge) shift; ACK_ARG="${1:-}" ;;
-    -h|--help)     sed -n '3,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)
+      cat <<'USAGE'
+neptune.sh — run the Neptune scan suite, then report a verdict and scores.
+
+  ./neptune.sh                    run the suite (read-only; nothing is deleted)
+  ./neptune.sh --json             also write structured findings as JSON
+  ./neptune.sh --json --sanitize  ...with host, user, IPs and MACs replaced,
+                                  for sharing or pasting into a model
+  ./neptune.sh --acknowledge N    mark finding N a known-good vendor quirk
+  ./neptune.sh --acknowledge 2,5  several at once, resolved before any write
+
+Acknowledged findings stay listed and stay counted — they only stop deducting
+from the score. Nothing is ever silently hidden. Edit ~/.neptune/allow to undo.
+
+Reports go to ~/Desktop. See SECURITY.md for the full footprint and how to
+verify what this does before running it.
+USAGE
+      exit 0 ;;
     *)             echo "Unknown option: $1" >&2; exit 1 ;;
   esac
   shift

@@ -5,3 +5,8 @@ sentry_report_*.txt
 redflag_report_*.txt
 .sentry/
 .DS_Store
+
+# macOS / sync-service duplicate copies ("File 2.md"). These appeared once in a
+# synced checkout and broke tests/lint.sh, which globs scripts/*.sh.
+* [0-9].*
+*.patch
