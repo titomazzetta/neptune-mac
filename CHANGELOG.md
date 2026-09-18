@@ -9,6 +9,40 @@ explains each in full — symptom, root cause, fix, and what was learned.
 
 ---
 
+## First full run of the verdict layer — 2026-09-18
+
+The verdict layer shipped, then ran end to end on a live Mac for the first time.
+It worked — and the working output immediately showed three things reading the
+code had not. See DEVLOG Bug 9.
+
+### Added
+- **`info` severity** — recorded and exported like any other finding, shown under
+  `FOR INFORMATION`, deducting nothing and not entering the verdict. For things
+  Neptune did (a baseline-format migration, a mode it ran in) as opposed to
+  things wrong with the machine. A clean Mac was losing 4 security points to
+  Neptune's own format upgrade.
+- **CI gate on recorded finding titles** — a finding is printed with its
+  surrounding paragraph and recorded as one line; the gate fails if any recorded
+  title ends on a word that cannot end a sentence. It derives the helper list per
+  script from which helpers call `record()`, and caught a second instance in a
+  code path this machine does not take on its first run.
+- **Drift guard between `tests/unit.sh` and `scripts/neptune.sh`** — the test
+  file transcribes neptune.sh's scoring weights; the assertion fails if the two
+  copies stop matching character for character.
+
+### Fixed
+- Digest item that read `...Root-owned daemons are NOT` — the recorded title was
+  half a sentence whose other half lived in an unprefixed echo. (Bug 9a)
+- CGNAT branch recorded the same finding twice, the first time as a fragment.
+  (Bug 9a)
+- Baseline-format migration notice deducted from the security score. (Bug 9b)
+- `sentry.sh` and `network_check.sh` reported different gateway latencies in the
+  same report — 3-ping vs 5-ping samples, neither stated. Both now ping 5 times
+  and report worst alongside average, so link variance reads as variance instead
+  of as a contradiction. (Bug 9c)
+
+---
+
 ## Verdict layer — 2026-09
 
 Neptune reported an expert's findings list; a real run on a clean machine

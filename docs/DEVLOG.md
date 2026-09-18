@@ -408,6 +408,121 @@ That is the difference the whole episode is about.
 
 ---
 
+## Bug 9 — Three defects the verdict layer's first real run exposed
+
+The verdict layer shipped and was then run, for the first time, end to end on
+the machine it was written for. It worked: 17 findings, continuous numbering,
+real signers named where every line had previously read `(unknown)`, sentry down
+from 10 flags to 2. The interesting part is what a working run makes visible
+that no amount of reading the code had.
+
+### 9a — A finding that stopped mid-sentence
+
+**Symptom.** Item 15 of the digest:
+
+```
+   15. [network] Unprivileged view: your own processes only. Root-owned daemons are NOT
+```
+
+**Cause.** In `network_check.sh` the finding is one `warn` call whose sentence
+continues into the next line of output — a plain, unprefixed `echo`. That is the
+correct pattern for *printing* (Bug 8 established that a finding prefix marks a
+finding and elaboration must not carry one). But `record()` only ever sees the
+`warn` argument. In the scan's own output the paragraph reads fine; in the
+digest, where a finding is one line stripped of its context, it stops mid-clause.
+
+The CGNAT branch had the same shape and worse: two consecutive `warn` calls for
+one problem, recording it twice and recording the first half as its own fragment.
+That is Bug 8 again, surviving in a branch this machine does not take — which is
+why it was never seen.
+
+**Fix.** Each records one complete clause and continues in an unprefixed echo.
+
+**The durable part** is the test. It derives, per script, which helpers actually
+call `record()`, then fails if any of their titles ends on a word that cannot end
+an English sentence. The helper list is derived rather than hardcoded for a
+specific reason: `netcheck_plus.sh` has a `note()` that only echoes, so a
+hardcoded list would fail on that one and would miss whatever recording helper
+gets added next. The gate found the CGNAT pair on its first run — a bug in a code
+path the author's own machine cannot reach.
+
+It is a smell test, not a parser, and that is the right size for the problem. The
+defect was always obvious to a human reading one line out of context. CI is just
+the thing that does not get bored.
+
+### 9b — The tool billed the user for its own upgrade
+
+**Symptom.** Item 12, counted as a security notice, costing 4 points:
+
+```
+   12. [security] Baseline format changed (v1 -> v2); baseline REPLACED, nothing diffed this run
+```
+
+**Cause.** `BASELINE_FORMAT` bumped to 2 when sentry started collapsing ephemeral
+listener ports, so the old baseline was not comparable and was replaced rather
+than diffed — deliberate, and loudly announced on purpose, because a silent
+baseline reset is how a tripwire quietly stops being a tripwire. But it was
+emitted through `warn()`, and `warn()` records a `notice`, and a notice deducts.
+A machine with nothing wrong with it lost security points because Neptune had
+upgraded its own file format.
+
+**Fix.** A fourth severity, `info`: recorded like any other finding so `--json`
+and the printed report cannot disagree, rendered in its own block, deducting
+nothing and not entering the verdict.
+
+```
+  FOR INFORMATION — about this run, not about your machine (no score impact)
+    · [security] Baseline format changed (v1 -> v2); baseline REPLACED, nothing diffed this run
+```
+
+Unnumbered, because the numbers are the argument to `--acknowledge` and there is
+nothing here to acknowledge.
+
+**Lesson.** A score is a claim about the machine. The moment it also reflects
+things the tool did to itself, it stops being that claim, and the user is right
+to stop reading it. The category existed implicitly the whole time — "things the
+user should see that are not defects" — and went into the nearest bucket because
+no bucket fit.
+
+### 9c — The report contradicted itself about the user's own router
+
+**Symptom.** In one combined report, two minutes apart:
+
+```
+sentry.sh          Gateway 192.168.50.1: 38.555 ms
+network_check.sh   Gateway (192.168.50.1):  9.372 ms avg
+```
+
+**Cause.** Not a parsing bug and not a wrong number — both were accurate. sentry
+pinged 3 times, `network_check` pinged 5, they sampled different moments, and
+neither said so. On Wi-Fi one power-save wake-up moves a 3-ping average by 30 ms.
+It also means sentry's "LAN latency high" warning was firing off a sample too
+small to support the claim.
+
+**Fix.** A common 5-ping sample in both, and avg reported alongside worst:
+
+```
+  Gateway (192.168.1.1):  9.372 ms avg, 38.555 ms worst (5 pings)
+```
+
+Reporting max is the better output on its own merits — an average hides the one
+200 ms outlier that is the actual symptom of a bad mesh hop. Here it also turns
+the contradiction into the finding.
+
+**Lesson.** Two scans measuring the same thing must agree or explain themselves;
+a reader cannot distinguish "the link is variable" from "this tool is broken"
+when only one number is shown and the sample behind it is not stated. This is the
+same failure as Bug 7's cross-scan disagreement about `limit.maxfiles` — a
+different pair of scans, the same lost trust.
+
+**What the three have in common.** None was findable by reading the code, and all
+three were obvious within thirty seconds of reading real output. The verdict
+layer's value turned out to be partly diagnostic: compressing five scans into one
+screen put a fragment, a self-inflicted deduction and a contradiction next to
+each other where they could not be missed.
+
+---
+
 ## Cross-cutting practices that came out of these
 
 - **CI as a regression net for exactly these bugs.** The pipeline runs shellcheck,
