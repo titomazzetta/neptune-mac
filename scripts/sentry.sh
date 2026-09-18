@@ -68,16 +68,6 @@ warn()    { out "  ${YEL}[!!]${RST} $*"; record notice "$*"; }
 flag()    { FLAGS+=("$*"); out "  ${RED}[FLAG]${RST} $*"; record attention "$*"; }
 unknown() { out "  ${YEL}[!!]${RST} $*"; record unknown "$*"; }
 
-REBASE=false
-[ "${1:-}" = "--rebaseline" ] && REBASE=true
-
-if [ "$(id -u)" -eq 0 ]; then echo "Run as normal user, not sudo."; exit 1; fi
-
-: > "$REPORT"
-out "${BOLD}Sentry — $(hostname) — $(date '+%Y-%m-%d %H:%M')${RST}"
-sudo -v || exit 1
-( while true; do sudo -n true 2>/dev/null; sleep 50; done ) & KA=$!
-trap 'kill $KA 2>/dev/null' EXIT
 
 sig() {
   local BIN=$1
@@ -93,6 +83,27 @@ sig() {
     echo "UNSIGNED"
   fi
 }
+
+# ---------------------------------------------------------------------------
+# Sourced by tests/unit.sh to exercise the pure functions above against
+# captured fixtures, without running a scan or touching the system. Nothing
+# below this line executes when NEPTUNE_LIB=1.
+#
+# Those functions are where the real bugs lived (DEVLOG Bugs 5 and 7), and they
+# need no macOS to test — only saved command output.
+# ---------------------------------------------------------------------------
+[ "${NEPTUNE_LIB:-}" = "1" ] && return 0
+
+REBASE=false
+[ "${1:-}" = "--rebaseline" ] && REBASE=true
+
+if [ "$(id -u)" -eq 0 ]; then echo "Run as normal user, not sudo."; exit 1; fi
+
+: > "$REPORT"
+out "${BOLD}Sentry — $(hostname) — $(date '+%Y-%m-%d %H:%M')${RST}"
+sudo -v || exit 1
+( while true; do sudo -n true 2>/dev/null; sleep 50; done ) & KA=$!
+trap 'kill $KA 2>/dev/null' EXIT
 
 ############################################################
 # 1. CHANGE DETECTION (HIDS-lite)

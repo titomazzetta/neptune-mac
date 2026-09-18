@@ -1,0 +1,6 @@
+Executable=/Applications/Splice.app/Contents/MacOS/Splice
+Identifier=com.splice.Splice
+Format=app bundle with Mach-O thin (arm64)
+CodeDirectory v=20500 size=637 flags=0x10000(runtime) hashes=9+7 location=embedded
+Signature size=9063
+Timestamp=Jul 23, 2026 at 11:32:09 PM

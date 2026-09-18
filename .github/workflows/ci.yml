@@ -62,6 +62,14 @@ jobs:
 
           exit $fail
 
+      - name: Unit tests (parsing layer, fixture-driven)
+        run: |
+          # These need no macOS — every bug in the 2026-09 audit lived in text
+          # processing and reproduces from captured command output. What they
+          # deliberately do NOT do is pretend to verify macOS-only behaviour;
+          # see the header of tests/unit.sh.
+          ./tests/unit.sh
+
       - name: Verify destructive scripts still require confirmation
         run: |
           # Guardrail: the two mutating scripts must contain an interactive

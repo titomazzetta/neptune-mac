@@ -35,13 +35,6 @@ ok()   { echo "  ${GRN}[ok]${RST} $*"; }
 warn() { echo "  ${YEL}[!!]${RST} $*"; record notice "$*"; }
 bad()  { echo "  ${RED}[XX]${RST} $*"; record attention "$*"; }
 
-PUBLIC_IP=false
-[ "${1:-}" = "--public-ip" ] && PUBLIC_IP=true
-
-# Same guard the other scripts carry (CLAUDE.md constraint 5).
-if [ "$(id -u)" -eq 0 ]; then
-  echo "Run as your normal user, not with sudo."; exit 1
-fi
 
 is_private() {
   case "$1" in
@@ -51,6 +44,24 @@ is_private() {
     *) return 1 ;;
   esac
 }
+
+# ---------------------------------------------------------------------------
+# Sourced by tests/unit.sh to exercise the pure functions above against
+# captured fixtures, without running a scan or touching the system. Nothing
+# below this line executes when NEPTUNE_LIB=1.
+#
+# Those functions are where the real bugs lived (DEVLOG Bugs 5 and 7), and they
+# need no macOS to test — only saved command output.
+# ---------------------------------------------------------------------------
+[ "${NEPTUNE_LIB:-}" = "1" ] && return 0
+
+PUBLIC_IP=false
+[ "${1:-}" = "--public-ip" ] && PUBLIC_IP=true
+
+# Same guard the other scripts carry (CLAUDE.md constraint 5).
+if [ "$(id -u)" -eq 0 ]; then
+  echo "Run as your normal user, not with sudo."; exit 1
+fi
 
 echo "${BOLD}Network check — $(date '+%Y-%m-%d %H:%M')${RST}"
 

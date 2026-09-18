@@ -56,16 +56,6 @@ unknown() { out "  ${YEL}[!!]${RST} $*"; record unknown "$*"; }
 # unlike note() this cannot be scrolled past silently.
 warn() { out "  ${YEL}[!!]${RST} $*"; record notice "$*"; }
 
-if [ "$(id -u)" -eq 0 ]; then
-  echo "Run as your normal user, not with sudo."; exit 1
-fi
-
-: > "$REPORT"
-out "${BOLD}Red-flag scan — $(hostname) — $(date '+%Y-%m-%d %H:%M')${RST}"
-out "macOS $(sw_vers -productVersion) ($(sw_vers -buildVersion))"
-sudo -v || exit 1
-( while true; do sudo -n true 2>/dev/null; sleep 50; done ) & KA=$!
-trap 'kill $KA 2>/dev/null' EXIT
 
 # Helper: signing summary for a binary. Echoes "apple" / "signed:<authority>" / "unsigned" / "missing"
 sig() {
@@ -82,6 +72,27 @@ sig() {
     echo "unsigned"
   fi
 }
+
+# ---------------------------------------------------------------------------
+# Sourced by tests/unit.sh to exercise the pure functions above against
+# captured fixtures, without running a scan or touching the system. Nothing
+# below this line executes when NEPTUNE_LIB=1.
+#
+# Those functions are where the real bugs lived (DEVLOG Bugs 5 and 7), and they
+# need no macOS to test — only saved command output.
+# ---------------------------------------------------------------------------
+[ "${NEPTUNE_LIB:-}" = "1" ] && return 0
+
+if [ "$(id -u)" -eq 0 ]; then
+  echo "Run as your normal user, not with sudo."; exit 1
+fi
+
+: > "$REPORT"
+out "${BOLD}Red-flag scan — $(hostname) — $(date '+%Y-%m-%d %H:%M')${RST}"
+out "macOS $(sw_vers -productVersion) ($(sw_vers -buildVersion))"
+sudo -v || exit 1
+( while true; do sudo -n true 2>/dev/null; sleep 50; done ) & KA=$!
+trap 'kill $KA 2>/dev/null' EXIT
 
 ############################################################
 # 1. Security baseline
