@@ -227,13 +227,23 @@ CATEGORY=network
 section "3. Network health"
 
 GATEWAY=$(route -n get default 2>/dev/null | awk '/gateway/{print $2}')
-GW_PING=$(ping -c 3 -q "${GATEWAY:-127.0.0.1}" 2>/dev/null | awk -F/ '/round-trip|rtt/{print $5}')
-NET_PING=$(ping -c 3 -q 1.1.1.1 2>/dev/null | awk -F/ '/round-trip|rtt/{print $5}')
-out "  Gateway ${GATEWAY:-?}: ${GW_PING:-?} ms | Internet: ${NET_PING:-?} ms"
+
+# 5 pings, matching network_check.sh, and avg + worst rather than avg alone.
+# At 3 pings a single Wi-Fi power-save wake-up moves the average by 30ms, and
+# the two scans then printed different latencies for the same router in the same
+# combined report — 38.555ms here against 9.372ms there. Nothing was wrong with
+# either number; they sampled different moments and neither said so. Showing the
+# spread, at a common sample size, makes the variance the finding.
+rtt() { ping -c 5 -q "$1" 2>/dev/null | awk -F/ '/round-trip|rtt/{print $5, $6}'; }
+GW_RTT=$(rtt "${GATEWAY:-127.0.0.1}")
+GW_PING=$(printf '%s' "$GW_RTT" | awk '{print $1}')
+GW_MAX=$(printf  '%s' "$GW_RTT" | awk '{print $2}')
+NET_PING=$(rtt 1.1.1.1 | awk '{print $1}')
+out "  Gateway ${GATEWAY:-?}: ${GW_PING:-?} ms avg / ${GW_MAX:-?} ms worst (5 pings) | Internet: ${NET_PING:-?} ms avg"
 
 if [ -n "${GW_PING:-}" ] && [ -n "${NET_PING:-}" ]; then
   if awk "BEGIN{exit !($GW_PING > 15)}"; then
-    warn "LAN latency high (${GW_PING}ms to your own router) — mesh backhaul or Wi-Fi issue"
+    warn "LAN latency high (${GW_PING}ms average to your own router over 5 pings) — mesh backhaul or Wi-Fi issue"
   else
     ok "LAN latency healthy"
   fi

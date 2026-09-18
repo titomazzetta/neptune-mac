@@ -161,18 +161,29 @@ done
 ############################################################
 section "Latency (idle baseline)"
 
+# min/avg/max/stddev — field 5 is avg, field 6 is max. Report both: an average
+# hides the one 200ms outlier that is the actual symptom of a bad mesh hop, and
+# it is why this scan and sentry.sh could print different latencies for the same
+# router in the same report and look like they disagreed. They sample different
+# moments; showing the spread makes that legible instead of suspicious.
+rtt() { ping -c 5 -q "$1" 2>/dev/null | awk -F/ '/round-trip|rtt/{print $5, $6}'; }
+
 if [ -n "${GATEWAY:-}" ]; then
-  GW_PING=$(ping -c 5 -q "$GATEWAY" 2>/dev/null | awk -F/ '/round-trip|rtt/{print $5}')
-  echo "  Gateway ($GATEWAY):  ${GW_PING:-?} ms avg"
+  GW_RTT=$(rtt "$GATEWAY")
+  GW_PING=$(printf '%s' "$GW_RTT" | awk '{print $1}')
+  GW_MAX=$(printf  '%s' "$GW_RTT" | awk '{print $2}')
+  echo "  Gateway ($GATEWAY):  ${GW_PING:-?} ms avg, ${GW_MAX:-?} ms worst (5 pings)"
   if [ -n "${GW_PING:-}" ] && awk "BEGIN{exit !($GW_PING > 10)}"; then
-    warn "Gateway latency over 10ms on your own LAN (${GW_PING} ms)"
+    warn "Gateway latency over 10ms on your own LAN (${GW_PING} ms average over 5 pings)"
     echo "       If this is Wi-Fi, check mesh node placement/backhaul; if Ethernet,"
     echo "       that's unusual."
   fi
 fi
 
-NET_PING=$(ping -c 5 -q 1.1.1.1 2>/dev/null | awk -F/ '/round-trip|rtt/{print $5}')
-echo "  Internet (1.1.1.1):  ${NET_PING:-?} ms avg"
+NET_RTT=$(rtt 1.1.1.1)
+NET_PING=$(printf '%s' "$NET_RTT" | awk '{print $1}')
+NET_MAX=$(printf  '%s' "$NET_RTT" | awk '{print $2}')
+echo "  Internet (1.1.1.1):  ${NET_PING:-?} ms avg, ${NET_MAX:-?} ms worst (5 pings)"
 
 echo
 echo "  ${BOLD}Bufferbloat note:${RST} the numbers above are IDLE latency. Bufferbloat only"
