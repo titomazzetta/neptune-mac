@@ -2,121 +2,103 @@
   SAMPLE NEPTUNE REPORT — SANITIZED
 ================================================================================
   Real output from `./neptune.sh` on a live Mac, committed so you can see what
-  the tool produces without running it.
+  the tool produces without running it. Captured 2026-09-18.
 
   Sanitized. Replaced with obvious placeholders:
     hostname          -> example-mac.local
     username / paths  -> exampleuser
-    public IP         -> 203.0.113.45         (RFC 5737 documentation range)
     LAN addresses     -> 192.168.1.x
     upstream router   -> 10.0.0.1
     ISP hops          -> 198.51.100.x         (RFC 5737 documentation range)
     one folder name   -> generic
 
-  Everything else is verbatim, including the rough edges.
+  Everything else is verbatim, including the rough edges. Developer Team IDs
+  (EQHXZ8M8AV, 9BNSXJN65R, ...) are public and are left as-is: they are the
+  point of the signing check.
 
-  CAPTURED BEFORE the fixes in this branch. It is kept as-is on purpose — it
-  is the evidence those fixes were made from. Visible here and since fixed:
-    - the action digest lists every finding twice and scatters sentence
-      fragments from the double-NAT explanation through the action list
-    - every signing authority reads "(unknown)": codesign was queried at the
-      wrong verbosity, so no certificate chain was ever returned
-    - Safari.app is listed as "not managed by brew/App Store" (it is Apple's)
-    - limit.maxfiles / limit.maxproc reported as orphaned plists by one scan
-      and as fine by another, in the same report
-    - "Application firewall state unknown" passes as a plain note
-    - 7 of 10 sentry flags are per-boot ephemeral port churn
+  KNOWN-WRONG LINES IN THIS CAPTURE. This is the run that exposed them, so it
+  is the evidence, and they are left in rather than edited out. All three are
+  fixed in the commits after this file; see docs/DEVLOG.md, Bug 9.
 
-  Regenerate this file after the fixes to show current output.
+    - item 15 stops mid-sentence ("...Root-owned daemons are NOT"). The
+      finding's second half lived in an unprefixed echo that the recorder
+      never saw.
+    - item 12 charges the security score 4 points for Neptune's own baseline
+      format migration — the tool billing the user for its own upgrade.
+    - sentry reports the gateway at 38.555 ms and network_check reports it at
+      9.372 ms, in the same report. Both were accurate; they used 3-ping and
+      5-ping samples two minutes apart and neither said so.
+
+  Everything else here is post-fix output, and the difference from the previous
+  capture is the point: every signing authority is now named where they all read
+  "(unknown)", the digest numbers 1-17 continuously instead of listing each
+  finding twice, limit.maxfiles/limit.maxproc agree across scans, the firewall
+  check returns a real answer, and sentry is down from 10 flags to 2.
 ================================================================================
 
 NEPTUNE FULL REPORT
 Host:  example-mac.local
 macOS: 26.6.2 (25G83)
-Date:  2026-09-16 10:59
+Date:  2026-09-18 09:01
 
 ================================================================
-  ACTION DIGEST — every flag and warning from all five scans
+  NEEDS ATTENTION
 ================================================================
-[!!] Gateway latency over 10ms on your own LAN — if this is Wi-Fi, check mesh
-[!!] node placement/backhaul; if Ethernet, that's unusual.
-[FLAG] Listener with unverifiable signature: WavesLoca (pid 4500) on [::1]:6985 [localhost-only] binary:/Library/Application Support/Waves/WavesLocalServer/WavesLocalServer.bundle/Contents/MacOS/WavesLocalServer
-[FLAG] Listener with unverifiable signature: WavesLoca (pid 4500) on 127.0.0.1:6985 [localhost-only] binary:/Library/Application Support/Waves/WavesLocalServer/WavesLocalServer.bundle/Contents/MacOS/WavesLocalServer
-[FLAG] NEW: listener:rapportd:*:61505
-[FLAG] NEW: listener:Splice:*:57789
-[FLAG] NEW: listener:Splice:127.0.0.1:10011
-[FLAG] NEW: listener:Splice:127.0.0.1:49177
-[FLAG] NEW: listener:Splice:127.0.0.1:49183
-[FLAG] NEW: listener:Splice:127.0.0.1:56765
-[FLAG] NEW: listener:Splice:127.0.0.1:57765
-[FLAG] Possible double NAT: private router(s) beyond your gateway: 10.0.0.1 — verify: if your router's WAN IP is private (192.168.x/10.x), double NAT is real; if it shows your public IP, this is IP-passthrough echo and is fine
-[FLAG] UNSIGNED persistence: com.docker.socket runs /Library/PrivilegedHelperTools/com.docker.socket (/Library/LaunchDaemons/com.docker.socket.plist)
-[FLAG] UNSIGNED persistence: com.paceap.eden.licensed runs /Library/PrivilegedHelperTools/licenseDaemon.app/Contents/MacOS/licenseDaemon (/Library/LaunchDaemons/com.paceap.eden.licensed.plist)
-[FLAG] UNSIGNED persistence: com.sonarworks.soundid.reference.systemwide runs /Applications/SoundID Reference.app/Contents/MacOS/SoundID Reference (/Users/exampleuser/Library/LaunchAgents/com.sonarworks.soundid.reference.systemwide.plist)
-[FLAG] UNSIGNED persistence: com.waves.wls.agent runs /Library/Application Support/Waves/WavesLocalServer/WavesLocalServer.bundle/Contents/MacOS/WavesLocalServer (/Library/LaunchAgents/com.waves.wls.agent.plist)
-[FLAG] UNSIGNED privileged helper (runs as root): /Library/PrivilegedHelperTools/com.docker.socket
-[FLAG] UNSIGNED privileged helper (runs as root): /Library/PrivilegedHelperTools/licenseDaemon.app
-[FLAG] Unsigned process with network access: SoundID (pid 4574) — sig:UNSIGNED — outbound:0 (/Applications/SoundID Reference.app/Contents/Frameworks/SoundID Reference Helper.app/Contents/MacOS/SoundID Reference Helper)
-[FLAG] Unsigned process with network access: WavesLoca (pid 4500) — sig:UNSIGNED — outbound:3 — LISTENING on: [::1]:6985 127.0.0.1:6985  (/Library/Application Support/Waves/WavesLocalServer/WavesLocalServer.bundle/Contents/MacOS/WavesLocalServer)
-[XX]                                passthrough on the ISP gateway
-[XX]   192.168.x / 10.x shown    -> double NAT is real; enable bridge/IP-
-[XX]   public IP (203.0.113.45) shown  -> passthrough working, you're fine
-[XX] private IP as a hop. Definitive test: check your router's WAN IP —
-[XX] SECOND PRIVATE ROUTER in path: 10.0.0.1 (beyond your gateway 192.168.1.1)
-[XX] This usually means double NAT: ISP gateway in router mode in front of
-[XX] your mesh. BUT ISP boxes in IP-passthrough mode can still echo their
-1. NEW: listener:rapportd:*:61505
-1. UNSIGNED persistence: com.sonarworks.soundid.reference.systemwide runs /Applications/SoundID Reference.app/Contents/MacOS/SoundID Reference (/Users/exampleuser/Library/LaunchAgents/com.sonarworks.soundid.reference.systemwide.plist)
-10. Possible double NAT: private router(s) beyond your gateway: 10.0.0.1 — verify: if your router's WAN IP is private (192.168.x/10.x), double NAT is real; if it shows your public IP, this is IP-passthrough echo and is fine
-2. NEW: listener:Splice:*:57789
-2. UNSIGNED persistence: com.waves.wls.agent runs /Library/Application Support/Waves/WavesLocalServer/WavesLocalServer.bundle/Contents/MacOS/WavesLocalServer (/Library/LaunchAgents/com.waves.wls.agent.plist)
-3. NEW: listener:Splice:127.0.0.1:10011
-3. UNSIGNED persistence: com.docker.socket runs /Library/PrivilegedHelperTools/com.docker.socket (/Library/LaunchDaemons/com.docker.socket.plist)
-4. NEW: listener:Splice:127.0.0.1:49177
-4. UNSIGNED persistence: com.paceap.eden.licensed runs /Library/PrivilegedHelperTools/licenseDaemon.app/Contents/MacOS/licenseDaemon (/Library/LaunchDaemons/com.paceap.eden.licensed.plist)
-5. NEW: listener:Splice:127.0.0.1:49183
-5. UNSIGNED privileged helper (runs as root): /Library/PrivilegedHelperTools/com.docker.socket
-6. NEW: listener:Splice:127.0.0.1:56765
-6. UNSIGNED privileged helper (runs as root): /Library/PrivilegedHelperTools/licenseDaemon.app
-7. Listener with unverifiable signature: WavesLoca (pid 4500) on [::1]:6985 [localhost-only] binary:/Library/Application Support/Waves/WavesLocalServer/WavesLocalServer.bundle/Contents/MacOS/WavesLocalServer
-7. NEW: listener:Splice:127.0.0.1:57765
-8. Listener with unverifiable signature: WavesLoca (pid 4500) on 127.0.0.1:6985 [localhost-only] binary:/Library/Application Support/Waves/WavesLocalServer/WavesLocalServer.bundle/Contents/MacOS/WavesLocalServer
-8. Unsigned process with network access: SoundID (pid 4574) — sig:UNSIGNED — outbound:0 (/Applications/SoundID Reference.app/Contents/Frameworks/SoundID Reference Helper.app/Contents/MacOS/SoundID Reference Helper)
-9. Unsigned process with network access: WavesLoca (pid 4500) — sig:UNSIGNED — outbound:3 — LISTENING on: [::1]:6985 127.0.0.1:6985  (/Library/Application Support/Waves/WavesLocalServer/WavesLocalServer.bundle/Contents/MacOS/WavesLocalServer)
+
+  security      51/100  [#####.....]
+  network       79/100  [#######...]
+  bloat        100/100  [##########]
+  maintenance   95/100  [#########.]
+
+  11 attention · 6 minor · 0 could not run · 0 acknowledged
+
+  NEEDS ATTENTION
+    1. [security] Unsigned process with network access: WavesLoca (pid 4500) — sig:UNSIGNED — outbound:3 — LISTENING on: [::1]:6985 127.0.0.1:6985  (/Library/Application Support/Waves/WavesLocalServer/WavesLocalServer.bundle/Contents/MacOS/WavesLocalServer)
+    2. [network] Possible double NAT: private router(s) beyond your gateway: 10.0.0.1 — verify: if your router's WAN IP is private (192.168.x/10.x), double NAT is real; if it shows your public IP, this is IP-passthrough echo and is fine
+    3. [security] UNSIGNED persistence: com.sonarworks.soundid.reference.systemwide runs /Applications/SoundID Reference.app/Contents/MacOS/SoundID Reference (/Users/exampleuser/Library/LaunchAgents/com.sonarworks.soundid.reference.systemwide.plist)
+    4. [security] UNSIGNED persistence: com.waves.wls.agent runs /Library/Application Support/Waves/WavesLocalServer/WavesLocalServer.bundle/Contents/MacOS/WavesLocalServer (/Library/LaunchAgents/com.waves.wls.agent.plist)
+    5. [security] UNSIGNED persistence: com.docker.socket runs /Library/PrivilegedHelperTools/com.docker.socket (/Library/LaunchDaemons/com.docker.socket.plist)
+    6. [security] UNSIGNED persistence: com.paceap.eden.licensed runs /Library/PrivilegedHelperTools/licenseDaemon.app/Contents/MacOS/licenseDaemon (/Library/LaunchDaemons/com.paceap.eden.licensed.plist)
+    7. [security] UNSIGNED privileged helper (runs as root): /Library/PrivilegedHelperTools/com.docker.socket
+    8. [security] UNSIGNED privileged helper (runs as root): /Library/PrivilegedHelperTools/licenseDaemon.app
+    9. [security] Listener with unverifiable signature: WavesLoca (pid 4500) on [::1]:6985 [localhost-only] binary:/Library/Application Support/Waves/WavesLocalServer/WavesLocalServer.bundle/Contents/MacOS/WavesLocalServer
+   10. [security] Listener with unverifiable signature: WavesLoca (pid 4500) on 127.0.0.1:6985 [localhost-only] binary:/Library/Application Support/Waves/WavesLocalServer/WavesLocalServer.bundle/Contents/MacOS/WavesLocalServer
+   11. [network] SECOND PRIVATE ROUTER in path: 10.0.0.1 (beyond your gateway 192.168.1.1)
+
+  MINOR
+   12. [security] Baseline format changed (v1 -> v2); baseline REPLACED, nothing diffed this run
+   13. [network] LAN latency high (38.555ms to your own router) — mesh backhaul or Wi-Fi issue
+   14. [security] Application firewall is OFF — a common default, but worth enabling on any machine that joins public Wi-Fi
+   15. [network] Unprivileged view: your own processes only. Root-owned daemons are NOT
+   16. [maintenance] Outdated formulae:
+   17. [maintenance] Outdated casks:
+
+  Recurring vendor quirk rather than a problem? Acknowledge it:
+      ./neptune.sh --acknowledge <n>      (number from the list above)
 ================================================================
 
 ################################################################
-##  SENTRY (change detection, process->network, staleness) — 11:00
+##  SENTRY (change detection, process->network, staleness) — 09:03
 ################################################################
-Sentry — example-mac.local — 2026-09-16 10:59
+Sentry — example-mac.local — 2026-09-18 09:01
 
 == 1. Change detection vs baseline ==
-  NEW since baseline:
-  [FLAG] NEW: listener:rapportd:*:61505
-  [FLAG] NEW: listener:Splice:*:57789
-  [FLAG] NEW: listener:Splice:127.0.0.1:10011
-  [FLAG] NEW: listener:Splice:127.0.0.1:49177
-  [FLAG] NEW: listener:Splice:127.0.0.1:49183
-  [FLAG] NEW: listener:Splice:127.0.0.1:56765
-  [FLAG] NEW: listener:Splice:127.0.0.1:57765
-  Removed since baseline:
-      listener:Overbridg:127.0.0.1:46010
-      listener:Overbridg:127.0.0.1:46011
-      listener:Overbridg:127.0.0.1:46012
-      listener:rapportd:*:57239
-  If these changes are yours (new software installed/removed), run:
-      ./sentry.sh --rebaseline
+  [!!] Baseline format changed (v1 -> v2); baseline REPLACED, nothing diffed this run
+      Listener ports in the dynamic range are now recorded as ':ephemeral'
+      rather than a per-boot number. Your previous baseline is not
+      comparable, so it was replaced rather than diffed against — a
+      cross-format diff would have looked like dozens of new listeners.
+      Re-run ./sentry.sh to compare against the new baseline.
 
 == 2. Process -> network map ==
   Processes with network activity (listeners and outbound):
       Ableton (pid 4785) — sig:signed — outbound:0
-      AirPlayXP (pid 487) — sig:signed — outbound:4
       airportd (pid 506) — sig:signed — outbound:0
       apsd (pid 460) — sig:signed — outbound:1
-      Claude (pid 5459) — sig:signed — outbound:7
+      ciphermld (pid 4615) — sig:signed — outbound:1
+      Claude (pid 46400) — sig:signed — outbound:2
       cloudd (pid 570) — sig:signed — outbound:0
       cloudd (pid 725) — sig:signed — outbound:0
-      Code\x20H (pid 1439) — sig:signed — outbound:1
       configd (pid 430) — sig:signed — outbound:0
       ControlCe (pid 838) — sig:signed — outbound:0 — LISTENING on: *:5000 *:7000 
       dataacces (pid 1445) — sig:signed — outbound:0
@@ -124,46 +106,46 @@ Sentry — example-mac.local — 2026-09-16 10:59
       expressvp (pid 643) — sig:signed — outbound:1
       figma_age (pid 4512) — sig:signed — outbound:0 — LISTENING on: 127.0.0.1:44950 127.0.0.1:44960 
       Focusrite (pid 642) — sig:signed — outbound:0 — LISTENING on: *:49152 
-      Google (pid 907) — sig:signed — outbound:3
+      Google (pid 907) — sig:signed — outbound:0
       homed (pid 760) — sig:signed — outbound:0
       identitys (pid 768) — sig:signed — outbound:6
       launchd (pid 1) — sig:signed — outbound:0 — LISTENING on: [::1]:8021 127.0.0.1:8021 
       Live (pid 771) — sig:signed — outbound:4
-      Mail (pid 776) — sig:signed — outbound:12
+      Mail (pid 776) — sig:signed — outbound:10
       mDNSRespo (pid 547) — sig:signed — outbound:0
-      netbiosd (pid 1014) — sig:signed — outbound:0
-      Notes (pid 816) — sig:signed — outbound:10
+      netbiosd (pid 51420) — sig:signed — outbound:0
+      Notes (pid 816) — sig:signed — outbound:12
       nsurlsess (pid 743) — sig:signed — outbound:0
       Overbridg (pid 4518) — sig:signed — outbound:1 — LISTENING on: 127.0.0.1:46000 
       rapportd (pid 745) — sig:signed — outbound:4 — LISTENING on: *:61505 
       replicato (pid 783) — sig:signed — outbound:0
       rtcreport (pid 651) — sig:signed — outbound:1
-      ServiceEx (pid 1307) — sig:signed — outbound:0
       sharingd (pid 766) — sig:signed — outbound:0
-  [FLAG] Unsigned process with network access: SoundID (pid 4574) — sig:UNSIGNED — outbound:0 (/Applications/SoundID Reference.app/Contents/Frameworks/SoundID Reference Helper.app/Contents/MacOS/SoundID Reference Helper)
       Splice (pid 1027) — sig:signed — outbound:8 — LISTENING on: 127.0.0.1:56765 
       Splice (pid 796) — sig:signed — outbound:9 — LISTENING on: *:57789 127.0.0.1:10011 127.0.0.1:49177 127.0.0.1:49183 127.0.0.1:57765 
+      symptomsd (pid 511) — sig:signed — outbound:0
       syslogd (pid 454) — sig:signed — outbound:0
       syspolicy (pid 554) — sig:signed — outbound:0
       Telegram (pid 826) — sig:signed — outbound:2
+      usbmuxd (pid 463) — sig:signed — outbound:1
   [FLAG] Unsigned process with network access: WavesLoca (pid 4500) — sig:UNSIGNED — outbound:3 — LISTENING on: [::1]:6985 127.0.0.1:6985  (/Library/Application Support/Waves/WavesLocalServer/WavesLocalServer.bundle/Contents/MacOS/WavesLocalServer)
       WeatherWi (pid 926) — sig:signed — outbound:0
       WhatsApp (pid 789) — sig:signed — outbound:1
       wifip2pd (pid 788) — sig:signed — outbound:0
 
 == 3. Network health ==
-  Gateway 192.168.1.1: 8.278 ms | Internet: 14.752 ms
-  [ok] LAN latency healthy
-  DNS resolution (example.org): 0m0.052s
+  Gateway 192.168.1.1: 38.555 ms | Internet: 39.551 ms
+  [!!] LAN latency high (38.555ms to your own router) — mesh backhaul or Wi-Fi issue
+  DNS resolution (example.org): 0m0.046s
   [FLAG] Possible double NAT: private router(s) beyond your gateway: 10.0.0.1 — verify: if your router's WAN IP is private (192.168.x/10.x), double NAT is real; if it shows your public IP, this is IP-passthrough echo and is fine
 
 == 4. App usage and staleness ==
   Actively used (last 30 days) — keep these updated:
       Ableton Live 12 Standard (v12.3.2 (2025-12-15_bba1e05a87))
       Ableton Live 12 Suite (v12.4.5 (2026-08-19_225ce5e356))
-      Claude (v2.110.0)
+      Claude (v2.2553.1)
       ExpressVPN (v14.2.0)
-      Google Chrome (v152.0.7977.84)
+      Google Chrome (v153.0.8010.48)
       Safari (v26.6.2)
       SoundID Reference (v5.12.2)
       Splice (v5.4.12)
@@ -202,70 +184,62 @@ Sentry — example-mac.local — 2026-09-16 10:59
       zoom.us (v7.1.0 (83064))
 
 ================ SENTRY SUMMARY ================
-10 item(s) flagged:
-  1. NEW: listener:rapportd:*:61505
-  2. NEW: listener:Splice:*:57789
-  3. NEW: listener:Splice:127.0.0.1:10011
-  4. NEW: listener:Splice:127.0.0.1:49177
-  5. NEW: listener:Splice:127.0.0.1:49183
-  6. NEW: listener:Splice:127.0.0.1:56765
-  7. NEW: listener:Splice:127.0.0.1:57765
-  8. Unsigned process with network access: SoundID (pid 4574) — sig:UNSIGNED — outbound:0 (/Applications/SoundID Reference.app/Contents/Frameworks/SoundID Reference Helper.app/Contents/MacOS/SoundID Reference Helper)
-  9. Unsigned process with network access: WavesLoca (pid 4500) — sig:UNSIGNED — outbound:3 — LISTENING on: [::1]:6985 127.0.0.1:6985  (/Library/Application Support/Waves/WavesLocalServer/WavesLocalServer.bundle/Contents/MacOS/WavesLocalServer)
-  10. Possible double NAT: private router(s) beyond your gateway: 10.0.0.1 — verify: if your router's WAN IP is private (192.168.x/10.x), double NAT is real; if it shows your public IP, this is IP-passthrough echo and is fine
+2 item(s) flagged:
+  1. Unsigned process with network access: WavesLoca (pid 4500) — sig:UNSIGNED — outbound:3 — LISTENING on: [::1]:6985 127.0.0.1:6985  (/Library/Application Support/Waves/WavesLocalServer/WavesLocalServer.bundle/Contents/MacOS/WavesLocalServer)
+  2. Possible double NAT: private router(s) beyond your gateway: 10.0.0.1 — verify: if your router's WAN IP is private (192.168.x/10.x), double NAT is real; if it shows your public IP, this is IP-passthrough echo and is fine
 
 Flags are leads, not verdicts. If flagged changes are software you
 installed yourself, rebaseline with: ./sentry.sh --rebaseline
 
-Report saved to: /Users/exampleuser/Desktop/sentry_report_2026-09-16_1059.txt
+Report saved to: /Users/exampleuser/Desktop/sentry_report_2026-09-18_0901.txt
 
 ################################################################
-##  RED-FLAG SCAN (persistence, listeners, interception) — 11:01
+##  RED-FLAG SCAN (persistence, listeners, interception) — 09:03
 ################################################################
-Red-flag scan — example-mac.local — 2026-09-16 11:00
+Red-flag scan — example-mac.local — 2026-09-18 09:03
 macOS 26.6.2 (25G83)
 
 == Security baseline ==
   [ok] System Integrity Protection: enabled
   [ok] Gatekeeper: enabled
-  Application firewall state unknown
-  XProtect definitions version: 5358
+  [!!] Application firewall is OFF — a common default, but worth enabling on any machine that joins public Wi-Fi
+  XProtect definitions version: 5360
 
 == Launchd persistence (non-Apple) ==
-  [ok] com.epicgames.launcher -> /usr/bin/open (unknown)
-  [ok] com.express.vpn.client -> /usr/bin/open (unknown)
-  [ok] com.google.GoogleUpdater.wake -> /Users/exampleuser/Library/Application Support/Google/GoogleUpdater/Current/GoogleUpdater.app/Contents/MacOS/GoogleUpdater (unknown)
+  [ok] com.epicgames.launcher -> /usr/bin/open (macOS Software Signing)
+  [ok] com.express.vpn.client -> /usr/bin/open (macOS Software Signing)
+  [ok] com.google.GoogleUpdater.wake -> /Users/exampleuser/Library/Application Support/Google/GoogleUpdater/Current/GoogleUpdater.app/Contents/MacOS/GoogleUpdater (Developer ID Application: Google LLC (EQHXZ8M8AV))
   [?] com.google.keystone.agent — could not resolve target (/Users/exampleuser/Library/LaunchAgents/com.google.keystone.agent.plist)
   [?] com.google.keystone.xpcservice — could not resolve target (/Users/exampleuser/Library/LaunchAgents/com.google.keystone.xpcservice.plist)
   [FLAG] UNSIGNED persistence: com.sonarworks.soundid.reference.systemwide runs /Applications/SoundID Reference.app/Contents/MacOS/SoundID Reference (/Users/exampleuser/Library/LaunchAgents/com.sonarworks.soundid.reference.systemwide.plist)
-  [ok] com.valvesoftware.steamclean -> /Users/exampleuser/Library/Application Support/Steam/SteamApps/steamclean (unknown)
-  [ok] com.Arturia.ArturiaSoftwareCenterAgent -> /Applications/Arturia/Arturia Software Center.app/Contents/Resources/ArturiaSoftwareCenterAgent.app/Contents/MacOS/ArturiaSoftwareCenterAgent (unknown)
-  [ok] com.paceap.eden.licensed.agent -> /Library/Frameworks/PACEEdenExperience.framework/Versions/Current/Software Activation (unknown)
-  [ok] com.pioneerdj.FwUpdateManagerd -> /Applications/Pioneer/FwUpdateManager/FwDownloader.app/Contents/Resources/FwUpdateManagerd.app/Contents/MacOS/FwUpdateManagerd (unknown)
+  [ok] com.valvesoftware.steamclean -> /Users/exampleuser/Library/Application Support/Steam/SteamApps/steamclean (Developer ID Application: Valve Corporation (MXGJJ98X76))
+  [ok] com.Arturia.ArturiaSoftwareCenterAgent -> /Applications/Arturia/Arturia Software Center.app/Contents/Resources/ArturiaSoftwareCenterAgent.app/Contents/MacOS/ArturiaSoftwareCenterAgent (Developer ID Application: Arturia (T53ZHSF36C))
+  [ok] com.paceap.eden.licensed.agent -> /Library/Frameworks/PACEEdenExperience.framework/Versions/Current/Software Activation (Developer ID Application: PACE Anti-Piracy, Inc. (TFZ8226T6X))
+  [ok] com.pioneerdj.FwUpdateManagerd -> /Applications/Pioneer/FwUpdateManager/FwDownloader.app/Contents/Resources/FwUpdateManagerd.app/Contents/MacOS/FwUpdateManagerd (Developer ID Application: AlphaTheta Corporation (6BRHGXQ6VU))
   [FLAG] UNSIGNED persistence: com.waves.wls.agent runs /Library/Application Support/Waves/WavesLocalServer/WavesLocalServer.bundle/Contents/MacOS/WavesLocalServer (/Library/LaunchAgents/com.waves.wls.agent.plist)
-  [ok] se.elektron.overbridge.engine -> /usr/bin/open (unknown)
-  [ok] us.zoom.updater.login.check -> /Applications/zoom.us.app/Contents/Library/LaunchAgents/ZoomUpdater.app/Contents/MacOS/ZoomUpdater (unknown)
-  [ok] us.zoom.updater -> /Applications/zoom.us.app/Contents/Library/LaunchAgents/ZoomUpdater.app/Contents/MacOS/ZoomUpdater (unknown)
-  [ok] com.Arturia.InstallHelper -> /Library/PrivilegedHelperTools/com.Arturia.InstallHelper (unknown)
+  [ok] se.elektron.overbridge.engine -> /usr/bin/open (macOS Software Signing)
+  [ok] us.zoom.updater.login.check -> /Applications/zoom.us.app/Contents/Library/LaunchAgents/ZoomUpdater.app/Contents/MacOS/ZoomUpdater (Developer ID Application: Zoom Video Communications, Inc. (BJ4HAAB9B3))
+  [ok] us.zoom.updater -> /Applications/zoom.us.app/Contents/Library/LaunchAgents/ZoomUpdater.app/Contents/MacOS/ZoomUpdater (Developer ID Application: Zoom Video Communications, Inc. (BJ4HAAB9B3))
+  [ok] com.Arturia.InstallHelper -> /Library/PrivilegedHelperTools/com.Arturia.InstallHelper (Developer ID Application: Arturia (T53ZHSF36C))
   [FLAG] UNSIGNED persistence: com.docker.socket runs /Library/PrivilegedHelperTools/com.docker.socket (/Library/LaunchDaemons/com.docker.socket.plist)
-  [ok] com.docker.vmnetd -> /Library/PrivilegedHelperTools/com.docker.vmnetd (unknown)
-  [ok] com.express.vpn.daemon -> /Applications/ExpressVPN.app/Contents/MacOS/expressvpn-daemon (unknown)
-  [ok] com.focusrite.ControlServer -> /Applications/Focusrite Control.app/Contents/Library/LoginItems/FocusriteControlServer.app/Contents/MacOS/FocusriteControlServer (unknown)
+  [ok] com.docker.vmnetd -> /Library/PrivilegedHelperTools/com.docker.vmnetd (Developer ID Application: Docker Inc (9BNSXJN65R))
+  [ok] com.express.vpn.daemon -> /Applications/ExpressVPN.app/Contents/MacOS/expressvpn-daemon (Developer ID Application: Expressco Services, LLC (TC292Y5427))
+  [ok] com.focusrite.ControlServer -> /Applications/Focusrite Control.app/Contents/Library/LoginItems/FocusriteControlServer.app/Contents/MacOS/FocusriteControlServer (Developer ID Application: Focusrite Audio Engineering Ltd. (7VYBQV3T2Q))
   [FLAG] UNSIGNED persistence: com.paceap.eden.licensed runs /Library/PrivilegedHelperTools/licenseDaemon.app/Contents/MacOS/licenseDaemon (/Library/LaunchDaemons/com.paceap.eden.licensed.plist)
-  [ok] com.sonarworks.soundid.reference.systemwide.ipc_proxy -> /Applications/SoundID Reference.app/Contents/Frameworks/SonarworksASPProxy (unknown)
-  [ok] com.waves.central.InstlHelper -> /Library/PrivilegedHelperTools/com.waves.central.InstlHelper (unknown)
-  [ok] limit.maxfiles -> /bin/launchctl (unknown)
-  [ok] limit.maxproc -> /bin/launchctl (unknown)
-  [ok] tc.tctechnologies.Saffire -> /Library/Application Support/Saffire/SaffireDaemon (unknown)
-  [ok] us.zoom.ZoomDaemon -> /Library/PrivilegedHelperTools/us.zoom.ZoomDaemon (unknown)
+  [ok] com.sonarworks.soundid.reference.systemwide.ipc_proxy -> /Applications/SoundID Reference.app/Contents/Frameworks/SonarworksASPProxy (Developer ID Application: Sonarworks SIA (L657ML245W))
+  [ok] com.waves.central.InstlHelper -> /Library/PrivilegedHelperTools/com.waves.central.InstlHelper (Developer ID Application: Waves Inc (GT6E3XD798))
+  [ok] limit.maxfiles -> /bin/launchctl (macOS Software Signing)
+  [ok] limit.maxproc -> /bin/launchctl (macOS Software Signing)
+  [ok] tc.tctechnologies.Saffire -> /Library/Application Support/Saffire/SaffireDaemon (Developer ID Application: TC Applied Technologies)
+  [ok] us.zoom.ZoomDaemon -> /Library/PrivilegedHelperTools/us.zoom.ZoomDaemon (Developer ID Application: Zoom Video Communications, Inc. (BJ4HAAB9B3))
   
   Privileged helpers:
-  [ok] com.Arturia.InstallHelper (signed:unknown)
+  [ok] com.Arturia.InstallHelper (signed:Developer ID Application: Arturia (T53ZHSF36C))
   [FLAG] UNSIGNED privileged helper (runs as root): /Library/PrivilegedHelperTools/com.docker.socket
-  [ok] com.docker.vmnetd (signed:unknown)
-  [ok] com.waves.central.InstlHelper (signed:unknown)
+  [ok] com.docker.vmnetd (signed:Developer ID Application: Docker Inc (9BNSXJN65R))
+  [ok] com.waves.central.InstlHelper (signed:Developer ID Application: Waves Inc (GT6E3XD798))
   [FLAG] UNSIGNED privileged helper (runs as root): /Library/PrivilegedHelperTools/licenseDaemon.app
-  [ok] us.zoom.ZoomDaemon (signed:unknown)
+  [ok] us.zoom.ZoomDaemon (signed:Developer ID Application: Zoom Video Communications, Inc. (BJ4HAAB9B3))
 
 == Other persistence (cron, hooks, startup items) ==
   [ok] No user crontab
@@ -278,21 +252,21 @@ macOS 26.6.2 (25G83)
   [ok] No processes running from /tmp, Downloads, or /Users/Shared
 
 == Network listeners (processes accepting connections) ==
-  [ok] ControlCe (pid 838) on *:5000 [ALL INTERFACES] — unknown
-  [ok] ControlCe (pid 838) on *:7000 [ALL INTERFACES] — unknown
-  [ok] figma_age (pid 4512) on 127.0.0.1:44950 [localhost-only] — unknown
-  [ok] figma_age (pid 4512) on 127.0.0.1:44960 [localhost-only] — unknown
-  [ok] Focusrite (pid 642) on *:49152 [ALL INTERFACES] — unknown
-  [ok] launchd (pid 1) on [::1]:8021 [localhost-only] — unknown
-  [ok] launchd (pid 1) on 127.0.0.1:8021 [localhost-only] — unknown
-  [ok] Overbridg (pid 4518) on 127.0.0.1:46000 [localhost-only] — unknown
-  [ok] rapportd (pid 745) on *:61505 [ALL INTERFACES] — unknown
-  [ok] Splice (pid 1027) on 127.0.0.1:56765 [localhost-only] — unknown
-  [ok] Splice (pid 796) on *:57789 [ALL INTERFACES] — unknown
-  [ok] Splice (pid 796) on 127.0.0.1:10011 [localhost-only] — unknown
-  [ok] Splice (pid 796) on 127.0.0.1:49177 [localhost-only] — unknown
-  [ok] Splice (pid 796) on 127.0.0.1:49183 [localhost-only] — unknown
-  [ok] Splice (pid 796) on 127.0.0.1:57765 [localhost-only] — unknown
+  [ok] ControlCe (pid 838) on *:5000 [ALL INTERFACES] — macOS Software Signing
+  [ok] ControlCe (pid 838) on *:7000 [ALL INTERFACES] — macOS Software Signing
+  [ok] figma_age (pid 4512) on 127.0.0.1:44950 [localhost-only] — Developer ID Application: Figma, Inc. (T8RA8NE3B7)
+  [ok] figma_age (pid 4512) on 127.0.0.1:44960 [localhost-only] — Developer ID Application: Figma, Inc. (T8RA8NE3B7)
+  [ok] Focusrite (pid 642) on *:49152 [ALL INTERFACES] — Developer ID Application: Focusrite Audio Engineering Ltd. (7VYBQV3T2Q)
+  [ok] launchd (pid 1) on [::1]:8021 [localhost-only] — macOS Software Signing
+  [ok] launchd (pid 1) on 127.0.0.1:8021 [localhost-only] — macOS Software Signing
+  [ok] Overbridg (pid 4518) on 127.0.0.1:46000 [localhost-only] — Developer ID Application: Elektron Music Machines MAV AB (KS6W2DLCW9)
+  [ok] rapportd (pid 745) on *:61505 [ALL INTERFACES] — macOS Software Signing
+  [ok] Splice (pid 1027) on 127.0.0.1:56765 [localhost-only] — Developer ID Application: Distributed Creation Inc (9962T6AKMH)
+  [ok] Splice (pid 796) on *:57789 [ALL INTERFACES] — Developer ID Application: Distributed Creation Inc (9962T6AKMH)
+  [ok] Splice (pid 796) on 127.0.0.1:10011 [localhost-only] — Developer ID Application: Distributed Creation Inc (9962T6AKMH)
+  [ok] Splice (pid 796) on 127.0.0.1:49177 [localhost-only] — Developer ID Application: Distributed Creation Inc (9962T6AKMH)
+  [ok] Splice (pid 796) on 127.0.0.1:49183 [localhost-only] — Developer ID Application: Distributed Creation Inc (9962T6AKMH)
+  [ok] Splice (pid 796) on 127.0.0.1:57765 [localhost-only] — Developer ID Application: Distributed Creation Inc (9962T6AKMH)
   [FLAG] Listener with unverifiable signature: WavesLoca (pid 4500) on [::1]:6985 [localhost-only] binary:/Library/Application Support/Waves/WavesLocalServer/WavesLocalServer.bundle/Contents/MacOS/WavesLocalServer
   [FLAG] Listener with unverifiable signature: WavesLoca (pid 4500) on 127.0.0.1:6985 [localhost-only] binary:/Library/Application Support/Waves/WavesLocalServer/WavesLocalServer.bundle/Contents/MacOS/WavesLocalServer
   
@@ -326,41 +300,39 @@ macOS 26.6.2 (25G83)
 Flags are leads, not verdicts — vendor quirks (Waves, Sonarworks, Docker)
 routinely fail signature checks. Share this report for a second opinion.
 
-Full report saved to: /Users/exampleuser/Desktop/redflag_report_2026-09-16_1100.txt
+Full report saved to: /Users/exampleuser/Desktop/redflag_report_2026-09-18_0903.txt
 
 ################################################################
-##  NETWORK CHECK (NAT, DNS, latency, connections) — 11:01
+##  NETWORK CHECK (NAT, DNS, latency, connections) — 09:04
 ################################################################
-Network check — 2026-09-16 11:01
+Network check — 2026-09-18 09:03
 
 == Local network identity ==
   Interface:  en1 (Wi-Fi)
-  Local IP:   192.168.1.50
+  Local IP:   192.168.1.94
   Gateway:    192.168.1.1
-  Public IP:  203.0.113.45
+  Public IP:  not checked — re-run with --public-ip to ask api.ipify.org
 
 == Double-NAT check ==
   First hops: 10.0.0.1 198.51.100.1 198.51.100.24
   [XX] SECOND PRIVATE ROUTER in path: 10.0.0.1 (beyond your gateway 192.168.1.1)
-  [XX] This usually means double NAT: ISP gateway in router mode in front of
-  [XX] your mesh. BUT ISP boxes in IP-passthrough mode can still echo their
-  [XX] private IP as a hop. Definitive test: check your router's WAN IP —
-  [XX]   public IP (203.0.113.45) shown  -> passthrough working, you're fine
-  [XX]   192.168.x / 10.x shown    -> double NAT is real; enable bridge/IP-
-  [XX]                                passthrough on the ISP gateway
+       This usually means double NAT: ISP gateway in router mode in front of
+       your mesh. BUT ISP boxes in IP-passthrough mode can still echo their
+       private IP as a hop. Definitive test: check your router's WAN IP —
+         your public IP shown -> passthrough working, you're fine
+         192.168.x / 10.x shown    -> double NAT is real; enable bridge/IP-
+                                      passthrough on the ISP gateway
 
 == DNS ==
   Servers: 1.1.1.1 192.168.1.1 8.8.8.8 
   (Router is your resolver — normal for mesh setups; the ASUS forwards upstream)
-  Resolve apple.com: 0m0.041s
-  Resolve anthropic.com: 0m0.045s
-  Resolve ableton.com: 0m0.047s
+  Resolve apple.com: 0m0.061s
+  Resolve anthropic.com: 0m0.064s
+  Resolve ableton.com: 0m0.046s
 
 == Latency (idle baseline) ==
-  Gateway (192.168.1.1):  11.350 ms avg
-  [!!] Gateway latency over 10ms on your own LAN — if this is Wi-Fi, check mesh
-  [!!] node placement/backhaul; if Ethernet, that's unusual.
-  Internet (1.1.1.1):  31.900 ms avg
+  Gateway (192.168.1.1):  9.372 ms avg
+  Internet (1.1.1.1):  36.101 ms avg
 
   Bufferbloat note: the numbers above are IDLE latency. Bufferbloat only
   shows up UNDER LOAD. To test properly, run the Waveform bufferbloat test
@@ -370,20 +342,22 @@ Network check — 2026-09-16 11:01
 
 == Active connections by app ==
     17  Splice
-    12  Mail
-    10  Notes
-     9  Claude
+    12  Notes
+    10  Mail
+     9  Google
+     8  trustd
      6  identitys
      4  rapportd
      4  Live
      3  WavesLoca
-     3  Google
-     2  trustd
      2  Telegram
+     2  Claude
      1  WhatsApp
      1  Overbridg
      1  desktop-h
-     1  accountsd
+
+  [!!] Unprivileged view: your own processes only. Root-owned daemons are NOT
+       listed here — sentry.sh and redflag_scan.sh elevate and do cover them.
 
   High counts are normal for browsers and sync apps (Chrome, MEGAsync, Slack).
   What deserves a second look: apps you are NOT actively using holding many
@@ -392,53 +366,53 @@ Network check — 2026-09-16 11:01
 Check complete. Read-only — nothing was changed.
 
 ################################################################
-##  SYSTEM AUDIT (resources, persistence, disk) — 11:02
+##  SYSTEM AUDIT (resources, persistence, disk) — 09:04
 ################################################################
-System audit — 2026-09-16 11:01
+System audit — 2026-09-18 09:04
 
 == Top 12 CPU consumers ==
    %CPU %MEM   PID COMM
-   47.1  4.2   771 Live
-   30.1  0.1  6594 XprotectService
-   22.8  0.5   491 WindowServer
-   16.0  1.2  4786 Ableton Index
-   13.2  1.6  5470 Claude Helper (Renderer)
-    8.5  0.4   844 Finder
-    7.6  0.3  5457 Claude Helper
-    7.5  1.1 12930 mediaanalysisd
-    6.1  0.0   661 usbaudiod
-    4.8  0.9 13629 Claude Helper (Renderer)
-    3.0  0.7   826 Telegram
-    1.7  0.3   676 mds_stores
+   46.9  3.7   771 Live
+   23.4  0.3   491 WindowServer
+   23.1  0.1  6594 XprotectService
+   21.1  0.4  4786 Ableton Index
+   11.2  0.1   797 bird
+    9.5  0.1   725 cloudd
+    8.7  0.1   754 trustd
+    7.5  0.0   661 usbaudiod
+    5.3  1.6 46411 Claude Helper (Renderer)
+    4.3  0.3   844 Finder
+    3.8  0.0   993 sysmond
+    3.8  0.3 46398 Claude Helper
 
 == Top 12 memory consumers ==
   %MEM  %CPU   PID COMM
-   5.0   0.2  5483 com.apple.Virtualization.VirtualMachine
-   4.2  47.1   771 Live
-   2.3   0.0   850 corespotlightd
-   1.6  13.2  5470 Claude Helper (Renderer)
-   1.3   1.2  5228 Google Chrome Helper (Renderer)
-   1.2  16.0  4786 Ableton Index
-   1.1   7.5 12930 mediaanalysisd
-   1.0   0.0   776 Mail
+   5.7   0.3 46428 com.apple.Virtualization.VirtualMachine
+   3.7  47.7   771 Live
+   1.6   4.5 46411 Claude Helper (Renderer)
+   1.1   0.0   850 corespotlightd
+   1.0   1.4 46392 Claude
    1.0   0.9   789 WhatsApp
-   1.0   0.0   769 Google Chrome
-   1.0   0.1  5452 Claude
-   0.9   4.8 13629 Claude Helper (Renderer)
+   1.0   0.0 50703 mediaanalysisd
+   0.8   0.5   776 Mail
+   0.7   0.0 52862 Google Chrome
+   0.7   0.0 27062 TGOnDeviceInferenceProviderService
+   0.6   3.5   826 Telegram
+   0.6   0.2  4561 contactsd
 
 == User launch agents (~/Library/LaunchAgents) ==
   com.epicgames.launcher
       plist:  /Users/exampleuser/Library/LaunchAgents/com.epicgames.launcher.plist
-      runs:   open
-      status: TARGET MISSING: open (orphaned plist)
+      runs:   /usr/bin/open
+      status: signed (macOS Software Signing)
   com.express.vpn.client
       plist:  /Users/exampleuser/Library/LaunchAgents/com.express.vpn.client.plist
       runs:   /usr/bin/open
-      status: signed (unknown authority)
+      status: signed (macOS Software Signing)
   com.google.GoogleUpdater.wake
       plist:  /Users/exampleuser/Library/LaunchAgents/com.google.GoogleUpdater.wake.plist
       runs:   /Users/exampleuser/Library/Application Support/Google/GoogleUpdater/Current/GoogleUpdater.app/Contents/MacOS/GoogleUpdater
-      status: signed (unknown authority)
+      status: signed (Developer ID Application: Google LLC (EQHXZ8M8AV))
   com.google.keystone.agent
       plist:  /Users/exampleuser/Library/LaunchAgents/com.google.keystone.agent.plist
       status: could not resolve target binary
@@ -452,21 +426,21 @@ System audit — 2026-09-16 11:01
   com.valvesoftware.steamclean
       plist:  /Users/exampleuser/Library/LaunchAgents/com.valvesoftware.steamclean.plist
       runs:   /Users/exampleuser/Library/Application Support/Steam/SteamApps/steamclean
-      status: signed (unknown authority)
+      status: signed (Developer ID Application: Valve Corporation (MXGJJ98X76))
 
 == Global launch agents (/Library/LaunchAgents) ==
   com.Arturia.ArturiaSoftwareCenterAgent
       plist:  /Library/LaunchAgents/com.Arturia.ArturiaSoftwareCenterAgent.plist
       runs:   /Applications/Arturia/Arturia Software Center.app/Contents/Resources/ArturiaSoftwareCenterAgent.app/Contents/MacOS/ArturiaSoftwareCenterAgent
-      status: signed (unknown authority)
+      status: signed (Developer ID Application: Arturia (T53ZHSF36C))
   com.paceap.eden.licensed.agent
       plist:  /Library/LaunchAgents/com.paceap.eden.licensed.agent.plist
       runs:   /Library/Frameworks/PACEEdenExperience.framework/Versions/Current/Software Activation
-      status: signed (unknown authority)
+      status: signed (Developer ID Application: PACE Anti-Piracy, Inc. (TFZ8226T6X))
   com.pioneerdj.FwUpdateManagerd
       plist:  /Library/LaunchAgents/com.pioneerdj.FwUpdateManagerd.plist
       runs:   /Applications/Pioneer/FwUpdateManager/FwDownloader.app/Contents/Resources/FwUpdateManagerd.app/Contents/MacOS/FwUpdateManagerd
-      status: signed (unknown authority)
+      status: signed (Developer ID Application: AlphaTheta Corporation (6BRHGXQ6VU))
   com.waves.wls.agent
       plist:  /Library/LaunchAgents/com.waves.wls.agent.plist
       runs:   /Library/Application Support/Waves/WavesLocalServer/WavesLocalServer.bundle/Contents/MacOS/WavesLocalServer
@@ -474,21 +448,21 @@ System audit — 2026-09-16 11:01
   se.elektron.overbridge.engine
       plist:  /Library/LaunchAgents/se.elektron.overbridge.engine.plist
       runs:   /usr/bin/open
-      status: signed (unknown authority)
+      status: signed (macOS Software Signing)
   us.zoom.updater.login.check
       plist:  /Library/LaunchAgents/us.zoom.updater.login.check.plist
       runs:   /Applications/zoom.us.app/Contents/Library/LaunchAgents/ZoomUpdater.app/Contents/MacOS/ZoomUpdater
-      status: signed (unknown authority)
+      status: signed (Developer ID Application: Zoom Video Communications, Inc. (BJ4HAAB9B3))
   us.zoom.updater
       plist:  /Library/LaunchAgents/us.zoom.updater.plist
       runs:   /Applications/zoom.us.app/Contents/Library/LaunchAgents/ZoomUpdater.app/Contents/MacOS/ZoomUpdater
-      status: signed (unknown authority)
+      status: signed (Developer ID Application: Zoom Video Communications, Inc. (BJ4HAAB9B3))
 
 == Global launch daemons (/Library/LaunchDaemons) ==
   com.Arturia.InstallHelper
       plist:  /Library/LaunchDaemons/com.Arturia.InstallHelper.plist
       runs:   /Library/PrivilegedHelperTools/com.Arturia.InstallHelper
-      status: signed (unknown authority)
+      status: signed (Developer ID Application: Arturia (T53ZHSF36C))
   com.docker.socket
       plist:  /Library/LaunchDaemons/com.docker.socket.plist
       runs:   /Library/PrivilegedHelperTools/com.docker.socket
@@ -496,15 +470,15 @@ System audit — 2026-09-16 11:01
   com.docker.vmnetd
       plist:  /Library/LaunchDaemons/com.docker.vmnetd.plist
       runs:   /Library/PrivilegedHelperTools/com.docker.vmnetd
-      status: signed (unknown authority)
+      status: signed (Developer ID Application: Docker Inc (9BNSXJN65R))
   com.express.vpn.daemon
       plist:  /Library/LaunchDaemons/com.express.vpn.daemon.plist
       runs:   /Applications/ExpressVPN.app/Contents/MacOS/expressvpn-daemon
-      status: signed (unknown authority)
+      status: signed (Developer ID Application: Expressco Services, LLC (TC292Y5427))
   com.focusrite.ControlServer
       plist:  /Library/LaunchDaemons/com.focusrite.ControlServer.plist
       runs:   /Applications/Focusrite Control.app/Contents/Library/LoginItems/FocusriteControlServer.app/Contents/MacOS/FocusriteControlServer
-      status: signed (unknown authority)
+      status: signed (Developer ID Application: Focusrite Audio Engineering Ltd. (7VYBQV3T2Q))
   com.paceap.eden.licensed
       plist:  /Library/LaunchDaemons/com.paceap.eden.licensed.plist
       runs:   /Library/PrivilegedHelperTools/licenseDaemon.app/Contents/MacOS/licenseDaemon
@@ -512,35 +486,35 @@ System audit — 2026-09-16 11:01
   com.sonarworks.soundid.reference.systemwide.ipc_proxy
       plist:  /Library/LaunchDaemons/com.sonarworks.soundid.reference.systemwide.ipc_proxy.plist
       runs:   /Applications/SoundID Reference.app/Contents/Frameworks/SonarworksASPProxy
-      status: signed (unknown authority)
+      status: signed (Developer ID Application: Sonarworks SIA (L657ML245W))
   com.waves.central.InstlHelper
       plist:  /Library/LaunchDaemons/com.waves.central.InstlHelper.plist
       runs:   /Library/PrivilegedHelperTools/com.waves.central.InstlHelper
-      status: signed (unknown authority)
+      status: signed (Developer ID Application: Waves Inc (GT6E3XD798))
   limit.maxfiles
       plist:  /Library/LaunchDaemons/limit.maxfiles.plist
-      runs:   launchctl
-      status: TARGET MISSING: launchctl (orphaned plist)
+      runs:   /bin/launchctl
+      status: signed (macOS Software Signing)
   limit.maxproc
       plist:  /Library/LaunchDaemons/limit.maxproc.plist
-      runs:   launchctl
-      status: TARGET MISSING: launchctl (orphaned plist)
+      runs:   /bin/launchctl
+      status: signed (macOS Software Signing)
   tc.tctechnologies.Saffire
       plist:  /Library/LaunchDaemons/tc.tctechnologies.Saffire.plist
       runs:   /Library/Application Support/Saffire/SaffireDaemon
-      status: signed (unknown authority)
+      status: signed (Developer ID Application: TC Applied Technologies)
   us.zoom.ZoomDaemon
       plist:  /Library/LaunchDaemons/us.zoom.ZoomDaemon.plist
       runs:   /Library/PrivilegedHelperTools/us.zoom.ZoomDaemon
-      status: signed (unknown authority)
+      status: signed (Developer ID Application: Zoom Video Communications, Inc. (BJ4HAAB9B3))
 
 == Privileged helper tools (/Library/PrivilegedHelperTools) ==
-  com.Arturia.InstallHelper — signed (?)
+  com.Arturia.InstallHelper — signed (Developer ID Application: Arturia (T53ZHSF36C))
   com.docker.socket — UNSIGNED
-  com.docker.vmnetd — signed (?)
-  com.waves.central.InstlHelper — signed (?)
+  com.docker.vmnetd — signed (Developer ID Application: Docker Inc (9BNSXJN65R))
+  com.waves.central.InstlHelper — signed (Developer ID Application: Waves Inc (GT6E3XD798))
   licenseDaemon.app — UNSIGNED
-  us.zoom.ZoomDaemon — signed (?)
+  us.zoom.ZoomDaemon — signed (Developer ID Application: Zoom Video Communications, Inc. (BJ4HAAB9B3))
 
 == System extensions ==
   1 extension(s)
@@ -553,16 +527,16 @@ System audit — 2026-09-16 11:01
 
 == Space consumers ==
   User caches (top 10):
-    3.4G	/Users/exampleuser/Library/Caches/Homebrew
+    3.5G	/Users/exampleuser/Library/Caches/Homebrew
     1.9G	/Users/exampleuser/Library/Caches/Google
     1.4G	/Users/exampleuser/Library/Caches/com.microsoft.VSCode.ShipIt
     1.3G	/Users/exampleuser/Library/Caches/ru.keepcoder.Telegram
+    912M	/Users/exampleuser/Library/Caches/net.whatsapp.WhatsApp
     742M	/Users/exampleuser/Library/Caches/Sonarworks
     458M	/Users/exampleuser/Library/Caches/central-updater
     223M	/Users/exampleuser/Library/Caches/Waves Audio
     223M	/Users/exampleuser/Library/Caches/SiriTTS
     102M	/Users/exampleuser/Library/Caches/icloudmailagent
-     98M	/Users/exampleuser/Library/Caches/com.apple.textunderstandingd
 
   Application Support (top 10):
      23G	/Users/exampleuser/Library/Application Support/Ableton
@@ -577,23 +551,23 @@ System audit — 2026-09-16 11:01
     256M	/Users/exampleuser/Library/Application Support/FileProvider
 
   Logs:
-    179M	/Users/exampleuser/Library/Logs
-     28M	/Library/Logs
+    181M	/Users/exampleuser/Library/Logs
+     23M	/Library/Logs
 
   System-level (needs sudo):
-    105M	/Library/Caches
-    2.5G	/private/var/folders
-     62M	/private/var/log
+     28M	/Library/Caches
+    2.3G	/private/var/folders
+     69M	/private/var/log
 
   Biggest items in home folder (top 10):
     300G	/Users/exampleuser/Music
-    148G	/Users/exampleuser/Library
+    133G	/Users/exampleuser/Library
      66G	/Users/exampleuser/Kali.Linux.vmwarevm
      26G	/Users/exampleuser/Pictures
      22G	/Users/exampleuser/Downloads
-     16G	/Users/exampleuser/Desktop
-    6.2G	/Users/exampleuser/Music Project Archive
-    1.8G	/Users/exampleuser/Documents
+     15G	/Users/exampleuser/Desktop
+    6.2G	/Users/exampleuser/Personal Project Folder
+    1.5G	/Users/exampleuser/Documents
     989M	/Users/exampleuser/VirtualBox VMs
     854M	/Users/exampleuser/Development
 
@@ -603,9 +577,9 @@ Large caches are usually safe to clear per-app, but don't blanket-delete:
 audio apps (Ableton, Splice, plugin scanners) rebuild caches slowly.
 
 ################################################################
-##  UPDATE SCAN (macOS, brew, App Store, self-updaters) — 11:03
+##  UPDATE SCAN (macOS, brew, App Store, self-updaters) — 09:05
 ################################################################
-Software update scan — 2026-09-16 11:02
+Software update scan — 2026-09-18 09:04
 Mode: scan only (run with --upgrade to install)
 
 == macOS system updates ==
@@ -654,14 +628,13 @@ Mode: scan only (run with --upgrade to install)
       Absynth 5.app  (v5.3.1 (R1628))
       ASM Manager.app  (v1.0.0)
       Audacity.app  (v3.7.8.0)
-      Claude.app  (v2.110.0)
+      Claude.app  (v2.2553.1)
       ExpressVPN.app  (v14.2.0)
       Focusrite Control.app  (v3.18.0.204)
       iLok License Manager.app  (v5.10.5 GM (b5356, c55e8d80))
       License Control Center.app  (v?)
       Perform-VE App.app  (v?)
       Reaktor 5.app  (v5.8.0 (R550))
-      Safari.app  (v26.6.2)
       Saffire MixControl.app  (v?)
       SoulseekQt.app  (v?)
       SoundID Reference Measure.app  (v5.12.2)
