@@ -120,8 +120,10 @@ echo "  First hops:$HOPLIST"
 if [ -z "$EXTRA_PRIV" ] && [ -z "$CGNAT" ]; then
   ok "Single NAT — only your router in the private path. Clean."
 elif [ -n "$CGNAT" ] && [ -z "$EXTRA_PRIV" ]; then
-  warn "CGNAT hop detected ($CGNAT) — your ISP NATs upstream. Not fixable on"
-  warn "your end; only matters for inbound connections/port forwarding."
+  # One finding, one record. This was two warn calls, which recorded the same
+  # problem twice and recorded the first half as its own sentence fragment.
+  warn "CGNAT hop detected ($CGNAT) — your ISP NATs upstream, which is not fixable on your end"
+  echo "       It only matters for inbound connections and port forwarding."
 else
   # ONE finding, then unprefixed continuation lines. The explanation used to be
   # seven consecutive bad() calls, so neptune.sh's digest — which greps for the
@@ -192,8 +194,12 @@ lsof -i -P -n 2>/dev/null | awk '$NF=="(ESTABLISHED)" {print $1}' | sort | uniq 
   awk '{printf "  %4d  %s\n", $1, $2}'
 
 echo
-warn "Unprivileged view: your own processes only. Root-owned daemons are NOT"
-echo "       listed here — sentry.sh and redflag_scan.sh elevate and do cover them."
+# The recorded title must stand alone. This finding used to read "...daemons
+# are NOT" in the master digest, because the sentence continued into a separate
+# unprefixed echo that record() never saw. A finding is only as good as the one
+# line a reader sees out of context.
+warn "Unprivileged view: only your own processes are listed here; root-owned daemons are not covered by this scan"
+echo "       sentry.sh and redflag_scan.sh elevate and do cover them."
 echo
 echo "  High counts are normal for browsers and sync apps (Chrome, MEGAsync, Slack)."
 echo "  What deserves a second look: apps you are NOT actively using holding many"

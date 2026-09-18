@@ -242,6 +242,35 @@ t_is "a pipe in the title is escaped, format holds" \
 t_is "field count stays 4" "4" "$(rec attention 'a | b | c' | awk -F'|' '{print NF}')"
 
 ############################################################
+t_section "Recorded titles must stand alone"
+############################################################
+# A finding is printed in its scan's own output, where a following unprefixed
+# echo can continue the sentence — and recorded as a single line, where nothing
+# does. network_check.sh recorded "...root-owned daemons are NOT" and the master
+# digest showed exactly that, mid-sentence, as item 15 of a real report.
+#
+# The heuristic: no recorded title may end on a word that cannot end an English
+# sentence. A smell test, not a parser — and that is the right size for the
+# problem, because the bug was always obvious to a human reading one line, and
+# CI is the thing that does not get bored.
+#
+# The helper names are derived per file from which helpers actually call
+# record(), rather than hardcoded. netcheck_plus.sh has a note() that only
+# echoes, so a hardcoded list would fail on it — and would miss a recording
+# helper added tomorrow under a name this file never heard of.
+DANGLING='(NOT|not|and|or|but|the|a|an|is|are|was|were|to|of|in|on|for|with|that|which|than|—|-|,)'
+FRAGMENTS=""
+for F in scripts/*.sh; do
+  HELPERS=$(grep -oE '^[a-z_]+\(\)[^#]*record ' "$F" | sed 's/().*//' \
+            | sort -u | tr '\n' '|' | sed 's/|$//')
+  [ -n "$HELPERS" ] || continue
+  HIT=$(grep -nE "^[[:space:]]*($HELPERS)[[:space:]]+\"[^\"]*\"" "$F" \
+        | grep -E "[[:space:]]$DANGLING\"[[:space:]]*\$" || true)
+  [ -n "$HIT" ] && FRAGMENTS="$FRAGMENTS$F:$HIT"
+done
+t_is "no recorded finding title ends mid-sentence" "" "$FRAGMENTS"
+
+############################################################
 printf '\n================================================\n'
 printf '  %d passed, %d failed\n' "$PASS" "$FAIL"
 printf '================================================\n'
