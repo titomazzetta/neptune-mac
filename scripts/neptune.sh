@@ -137,7 +137,11 @@ run_script "check_updates.sh" "UPDATE SCAN (macOS, brew, App Store, self-updater
 #
 # Scans append structured records to $NEPTUNE_FINDINGS as:
 #     severity|category|scan|title
-# severity ∈ attention | notice | unknown        (see each scan's record())
+# severity ∈ attention | notice | unknown | info (see each scan's record())
+#   info is shown and exported but never scored: it reports something Neptune
+#   did (a baseline migration, a mode it ran in), not something wrong with the
+#   machine. Scoring those made a clean Mac lose 4 security points for Neptune's
+#   own format upgrade.
 # category ∈ security | network | bloat | maintenance
 #
 # Everything below renders from those records. Nothing here re-parses the
@@ -177,6 +181,7 @@ awk -F'|' '
     if (!(cat in score)) { score[cat] = 100; C[++n] = cat }
     if (acked == 1) { acks[cat]++; total_ack++; next }
     counts[sev]++
+    if (sev == "info") next        # shown and exported, never deducted
     # First issue of a severity in a category costs full weight; each repeat
     # costs about a third. Nine unsigned launch items are usually one habit
     # (a vendor that ships unsigned helpers), not nine independent problems —
@@ -197,6 +202,7 @@ awk -F'|' '
     printf "count|attention|%d\n", counts["attention"] + 0
     printf "count|notice|%d\n",    counts["notice"] + 0
     printf "count|unknown|%d\n",   counts["unknown"] + 0
+    printf "count|info|%d\n",      counts["info"] + 0
     printf "count|acknowledged|%d\n", total_ack + 0
   }
 ' "$SCORED" > "$SCORES"
@@ -204,6 +210,7 @@ awk -F'|' '
 getcount() { awk -F'|' -v k="$1" '$1=="count" && $2==k {print $3}' "$SCORES"; }
 N_ATTENTION=$(getcount attention); N_NOTICE=$(getcount notice)
 N_UNKNOWN=$(getcount unknown);     N_ACK=$(getcount acknowledged)
+N_INFO=$(getcount info)
 
 # Verdict. Ordered worst-first, and "couldn't check" outranks "minor" on
 # purpose: an un-run check is an unknown, not a pass.
@@ -226,8 +233,10 @@ render_verdict() {
            ($4 > 0 ? "  (" $4 " acknowledged)" : "")
   }' "$SCORES"
   echo
-  printf '  %s attention · %s minor · %s could not run · %s acknowledged\n' \
+  printf '  %s attention · %s minor · %s could not run · %s acknowledged' \
     "${N_ATTENTION:-0}" "${N_NOTICE:-0}" "${N_UNKNOWN:-0}" "${N_ACK:-0}"
+  [ "${N_INFO:-0}" -gt 0 ] && printf ' · %s informational' "$N_INFO"
+  echo
 
   # ONE number sequence across all three sections. Numbering per section made
   # `--acknowledge 3` ambiguous, and the lookup indexed a different list than
@@ -249,6 +258,13 @@ $(awk -F'|' -v s="$SEV" '$1==s && $6==0' "$SCORED")
 EOF_F
     fi
   done
+
+  # Unnumbered on purpose: the numbers above are the argument to --acknowledge,
+  # and there is nothing to acknowledge here. These are notes about the run.
+  if [ "${N_INFO:-0}" -gt 0 ]; then
+    echo; echo "  FOR INFORMATION — about this run, not about your machine (no score impact)"
+    awk -F'|' '$1=="info" && $6==0 {printf "    · [%s] %s\n", $2, $4}' "$SCORED"
+  fi
 
   if [ "${N_ACK:-0}" -gt 0 ]; then
     echo; echo "  ACKNOWLEDGED — known-good on this machine, still counted"

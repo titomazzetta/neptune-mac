@@ -205,6 +205,7 @@ score() { # <findings file> <allow file>
       sev = $1; cat = $2; title = $4
       key = tolower(title); gsub(/[0-9]+/, "#", key)
       if (key in allow) { next }
+      if (sev == "info") next
       seen[cat "|" sev]++
       if (seen[cat "|" sev] == 1)
         w = (sev == "attention") ? 12 : (sev == "unknown") ? 8 : 4
@@ -226,6 +227,30 @@ printf 'unsigned persistence: com.waves.wls.agent runs /library/application supp
 t_is "acknowledging a finding raises its category and nothing else" \
    "security=76 network=84 bloat=100 maintenance=96 " \
    "$(score $FIX/findings-realworld.txt /tmp/nt_allow.txt)"
+
+# An 'info' record reports something NEPTUNE did, not something wrong with the
+# machine. It is recorded so --json and the report agree, but it must cost zero.
+# The 2026-09-18 run lost 4 security points to Neptune's own baseline-format
+# migration, which is the tool billing the user for its own upgrade.
+cp "$FIX/findings-realworld.txt" /tmp/nt_info.txt
+printf 'info|security|sentry|Baseline format changed (v1 -> v2); baseline REPLACED, nothing diffed this run\n' >> /tmp/nt_info.txt
+t_is "an info record changes no score" \
+   "$(score "$FIX/findings-realworld.txt" /tmp/nt_allow_empty.txt)" \
+   "$(score /tmp/nt_info.txt /tmp/nt_allow_empty.txt)"
+
+# score() above is a transcription of the awk in neptune.sh. A transcription
+# that drifts from its original tests nothing, so assert the weights are still
+# character-identical in both files rather than trusting they are.
+# Two distinct weight lines (first-of-kind, repeat) must appear in both files
+# with identical text, so four matches collapse to two unique strings.
+# Pattern assembled from pieces so these two lines do not match themselves.
+W_PAT='w = (sev == "'"atten""tion"'")'
+W_UNIQ=$(grep -hF "$W_PAT" scripts/neptune.sh tests/unit.sh \
+           | sed 's/^[[:space:]]*//' | sort -u | wc -l | xargs)
+W_TOTAL=$(grep -hcF "$W_PAT" scripts/neptune.sh tests/unit.sh \
+           | awk '{s += $1} END {print s}')
+t_is "both scoring copies exist"                     "4" "$W_TOTAL"
+t_is "and their weights have not drifted apart"      "2" "$W_UNIQ"
 
 # The key is digit-collapsed so it survives changing PIDs and ports.
 KEY_A=$(echo "Unsigned process with network access: SoundID (pid 4574)" | tr 'A-Z' 'a-z' | sed 's/[0-9][0-9]*/#/g')

@@ -67,6 +67,12 @@ ok()      { out "  ${GRN}[ok]${RST} $*"; }
 warn()    { out "  ${YEL}[!!]${RST} $*"; record notice "$*"; }
 flag()    { FLAGS+=("$*"); out "  ${RED}[FLAG]${RST} $*"; record attention "$*"; }
 unknown() { out "  ${YEL}[!!]${RST} $*"; record unknown "$*"; }
+# Something the reader should see but that is not a defect in the machine: a
+# one-time migration, a mode the scan ran in. It is recorded — suppressing it
+# from --json would make the JSON disagree with the report — but it deducts no
+# points and does not move the verdict. A tool that charges you for its own
+# housekeeping is a tool whose score you stop trusting.
+info()    { out "  ${YEL}[!!]${RST} $*"; record info "$*"; }
 
 
 sig() {
@@ -161,7 +167,7 @@ if [ ! -f "$BASELINE" ] || $REBASE; then
 elif [ "$STORED_FORMAT" != "$BASELINE_FORMAT" ]; then
   cp "$CURRENT" "$BASELINE"
   echo "$BASELINE_FORMAT" > "$FORMATFILE"
-  warn "Baseline format changed (v${STORED_FORMAT} -> v${BASELINE_FORMAT}); baseline REPLACED, nothing diffed this run"
+  info "Baseline format changed (v${STORED_FORMAT} -> v${BASELINE_FORMAT}); baseline REPLACED, nothing diffed this run"
   out "      Listener ports in the dynamic range are now recorded as ':ephemeral'"
   out "      rather than a per-boot number. Your previous baseline is not"
   out "      comparable, so it was replaced rather than diffed against — a"
