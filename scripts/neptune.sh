@@ -164,7 +164,12 @@ awk -F'|' -v allowfile="$ALLOW" '
     key = tolower(title)
     gsub(/[0-9]+/, "#", key); gsub(/[ \t]+/, " ", key)
     sub(/^ /, "", key); sub(/ $/, "", key)
-    if (length(key) > 90) key = substr(key, 1, 90)
+    # Truncate at a SPACE, never at byte 90. substr in awk counts bytes, and
+    # these titles are full of em-dashes: cutting one of those in half leaves a
+    # lone \xe2\x80 and the record is no longer valid UTF-8, which crashed
+    # --json outright on the real machine (DEVLOG Bug 10). A space is ASCII, so
+    # a cut there cannot land inside a character.
+    if (length(key) > 90) { key = substr(key, 1, 90); sub(/[^ ]*$/, "", key); sub(/ +$/, "", key) }
     printf "%s|%s|%s|%s|%s|%s\n", sev, cat, scan, title, key, (key in allow) ? 1 : 0
   }
 ' "$FINDINGS" 2>/dev/null | awk -F'|' '!seen[$1 "|" $2 "|" $4]++' > "$SCORED"

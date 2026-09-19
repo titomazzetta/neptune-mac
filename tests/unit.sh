@@ -267,6 +267,45 @@ t_is "a pipe in the title is escaped, format holds" \
 t_is "field count stays 4" "4" "$(rec attention 'a | b | c' | awk -F'|' '{print NF}')"
 
 ############################################################
+t_section "Acknowledge key must stay valid UTF-8 (DEVLOG Bug 10)"
+############################################################
+# substr() in awk counts BYTES, and these titles are full of em-dashes. A cut at
+# byte 90 could land inside one and leave a lone \xe2\x80 in the record, which is
+# no longer valid UTF-8 — and --json died reading it. Finding #1 of the real
+# 2026-09-18 report is exactly this shape, so the bug was one flag away the whole
+# time. The fix cuts back to the previous space, and a space cannot be inside a
+# character.
+LONG_TITLE="Unsigned process with network access: WavesLoca (pid 4500) — sig:UNSIGNED — outbound:3 — LISTENING on: [::1]:6985"
+
+fixed_key() {
+  awk '{ key = tolower($0); gsub(/[0-9]+/, "#", key); gsub(/[ \t]+/, " ", key)
+         if (length(key) > 90) { key = substr(key, 1, 90); sub(/[^ ]*$/, "", key); sub(/ +$/, "", key) }
+         print key }'
+}
+broken_key() {  # what shipped, kept so the test is pinned to a reproduction
+  awk '{ key = tolower($0); gsub(/[0-9]+/, "#", key); print substr(key, 1, 90) }'
+}
+utf8_ok() { python3 -c 'import sys; sys.stdin.buffer.read().decode("utf-8")' 2>/dev/null; }
+
+if printf '%s' "$LONG_TITLE" | fixed_key | utf8_ok; then
+  t_ok "truncated key is valid UTF-8"
+else
+  t_fail "truncated key is valid UTF-8" "decodes cleanly" "invalid byte sequence"
+fi
+
+if printf '%s' "$LONG_TITLE" | broken_key | utf8_ok; then
+  t_fail "the old byte-cut really did corrupt this title" \
+         "invalid UTF-8" "decoded fine — the fixture no longer reproduces the bug"
+else
+  t_ok "the old byte-cut really did corrupt this title"
+fi
+
+K=$(printf '%s' "$LONG_TITLE" | fixed_key)
+t_is "key is truncated, not passed through" "yes" \
+   "$( [ "${#K}" -lt "${#LONG_TITLE}" ] && echo yes || echo no )"
+t_is "key has no trailing space" "" "$(printf '%s' "$K" | grep -o ' $' || true)"
+
+############################################################
 t_section "Recorded titles must stand alone"
 ############################################################
 # A finding is printed in its scan's own output, where a following unprefixed
