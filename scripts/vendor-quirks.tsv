@@ -1,0 +1,50 @@
+# vendor-quirks.tsv — software known to trip Neptune's signature checks
+#
+# WHAT THIS IS: a labelling layer, not a suppression list. A finding that
+# matches an entry here is still found, still listed, still counted, and still
+# deducts from the score. All this adds is a name and a sentence, so that a
+# first run on a working Mac reads as "six of these are Waves and Docker doing
+# what they have always done" instead of eleven anonymous red lines.
+#
+# WHY NOT JUST ACKNOWLEDGE THEM: because that decision is not Neptune's to make.
+# "Docker ships an unsigned root helper" is a fact about Docker. "That is fine
+# on my machine" is a judgement about your threat model, and the cleaner
+# products this tool was built to replace are precisely the ones that make it
+# for you and call the result a clean bill of health. Acknowledging stays a
+# thing you do deliberately, with --acknowledge, one finding at a time.
+#
+# FORMAT: pattern <TAB> vendor <TAB> note
+#   pattern  lowercase substring matched against the lowercased finding title.
+#            Matched as a plain substring — no globs, no regex — so an entry
+#            cannot accidentally widen.
+#   vendor   short name shown in the report
+#   note     one sentence on what this software does and why it looks like this
+#
+# ADDING AN ENTRY: only for software whose behaviour you have actually verified
+# on a machine, and only describing what it does — never asserting that it is
+# safe. Every line here is a claim Neptune is making on the reader's behalf, so
+# the bar is evidence, not plausibility.
+#
+# Entries are ordered most-specific first; the first match wins.
+
+com.waves.wls.agent	Waves	Waves Audio ships WavesLocalServer, its licence and plugin-scanning daemon, without a valid signature. Longstanding across versions, and it listens only on localhost.
+waveslocalserver	Waves	Waves Audio's local licence server. Unsigned in every shipped version to date; binds to 127.0.0.1 and [::1] only.
+com.waves.central	Waves	Waves Central's installer helper. Signed, but installs the unsigned components above.
+com.sonarworks	Sonarworks	SoundID Reference installs a system-wide audio agent. Some components are signed and some are not, in the same release.
+soundid reference	Sonarworks	SoundID Reference's system-wide audio processing agent, frequently shipped unsigned.
+com.docker.socket	Docker	Docker Desktop's socket helper runs as root and ships unsigned. Docker's other helper, com.docker.vmnetd, is signed — the inconsistency is Docker's, not a sign of tampering.
+com.paceap	PACE/iLok	PACE Anti-Piracy's licence daemon, bundled by most commercial audio plugins. Runs as root; the daemon binary is routinely unsigned while the framework beside it is signed.
+licensedaemon	PACE/iLok	PACE Anti-Piracy's licence daemon, installed by iLok-protected software. Runs as root and is routinely unsigned.
+se.elektron.overbridge	Elektron	Elektron Overbridge installs a DriverKit extension and a launch agent for hardware audio devices.
+com.focusrite	Focusrite	Focusrite Control's server component, which listens on an all-interfaces port to talk to the audio interface.
+tc.tctechnologies.saffire	TC Applied	Saffire MixControl's daemon for FireWire-era Focusrite hardware. Signed with a certificate that no longer carries a team ID.
+com.native-instruments	Native Instruments	Native Access and NI hardware services install several helpers; signing has been inconsistent across generations.
+com.arturia	Arturia	Arturia Software Center's updater agent and install helper.
+com.ableton	Ableton	Ableton Live's installer and index helpers.
+com.google.keystone	Google	Google's legacy updater. Its plists often outlive the binary they point at, which is why they show up as unresolvable rather than unsigned.
+com.google.googleupdater	Google	Google's current updater, installed by Chrome and other Google software.
+us.zoom	Zoom	Zoom's updater and its root daemon. Both signed; listed here because they are frequently queried.
+com.microsoft.autoupdate	Microsoft	Microsoft AutoUpdate, installed by any Office application.
+com.adobe	Adobe	Adobe's Creative Cloud helpers install several root daemons and launch agents.
+com.valvesoftware	Valve	Steam's cleanup agent.
+com.epicgames	Epic	The Epic Games launcher's login item.

@@ -343,6 +343,134 @@ ADV
 t_is "no remediation command is a pipeline, chain or substitution" "" "$PIPED"
 
 ############################################################
+t_section "Vendor catalogue is a label, never a suppression"
+############################################################
+QF=scripts/vendor-quirks.tsv
+
+# Format: three tab-separated columns, lowercase pattern, no duplicates.
+BADCOLS=$(grep -v '^#' "$QF" | grep -v '^[[:space:]]*$' | awk -F'\t' 'NF != 3 {print NR": "NF" columns"}')
+t_is "every entry has exactly three columns" "" "$BADCOLS"
+
+UPPER=$(grep -v '^#' "$QF" | grep -v '^[[:space:]]*$' | awk -F'\t' '$1 ~ /[A-Z]/ {print $1}')
+t_is "patterns are lowercase (they match a lowercased title)" "" "$UPPER"
+
+DUPES=$(grep -v '^#' "$QF" | grep -v '^[[:space:]]*$' | cut -f1 | sort | uniq -d)
+t_is "no duplicate patterns" "" "$DUPES"
+
+# A pattern that is a substring of another entry's pattern must come FIRST, or
+# the more specific entry is unreachable. The file documents "most specific
+# first"; this is the assertion behind the comment.
+SHADOWED=$(awk -F'\t' '
+  !/^#/ && NF == 3 { n++; pat[n] = $1 }
+  END {
+    for (i = 1; i <= n; i++)
+      for (j = i + 1; j <= n; j++)
+        if (index(pat[j], pat[i]) > 0)
+          print pat[j] " is unreachable: " pat[i] " matches first"
+  }' "$QF")
+t_is "no entry is shadowed by an earlier, broader one" "" "$SHADOWED"
+
+# The labelling matcher, mirroring the awk in neptune.sh.
+label_for() {
+  awk -F'\t' -v quirks="$QF" -v title="$1" '
+    BEGIN {
+      while ((getline line < quirks) > 0) {
+        if (line ~ /^#/ || line ~ /^[ \t]*$/) continue
+        split(line, f, "\t")
+        if (f[1] == "" || f[2] == "") continue
+        n++; pat[n] = f[1]; ven[n] = f[2]
+      }
+      lt = tolower(title)
+      for (i = 1; i <= n; i++) if (index(lt, pat[i]) > 0) { print ven[i]; exit }
+    }'
+}
+
+t_is "the Waves listener is labelled" "Waves" \
+   "$(label_for 'Unsigned process with network access: WavesLoca (pid 4500) — /Library/Application Support/Waves/WavesLocalServer/WavesLocalServer.bundle/Contents/MacOS/WavesLocalServer')"
+t_is "the Docker root helper is labelled" "Docker" \
+   "$(label_for 'UNSIGNED privileged helper (runs as root): /Library/PrivilegedHelperTools/com.docker.socket')"
+t_is "the PACE licence daemon is labelled" "PACE/iLok" \
+   "$(label_for 'UNSIGNED persistence: com.paceap.eden.licensed runs /Library/PrivilegedHelperTools/licenseDaemon.app')"
+t_is "an unrelated finding is NOT labelled" "" \
+   "$(label_for 'SECOND PRIVATE ROUTER in path: 192.168.1.254')"
+t_is "a plausible-looking impostor is not labelled" "" \
+   "$(label_for 'UNSIGNED persistence: com.evil.fakewaves runs /tmp/x')"
+
+# The property that matters most: a label must not change severity, scoring or
+# the acknowledged flag. Nothing in the catalogue is allowed to suppress.
+t_is "the catalogue file never mentions acknowledging or suppressing" "" \
+   "$(grep -n 'acknowledge\|suppress' "$QF" | grep -v '^[0-9]*:#' || true)"
+
+############################################################
+t_section "Per-finding history (first seen, run count)"
+############################################################
+bump_seen() { # <seen file> <date> <keys...>
+  local SF=$1 DAY=$2; shift 2
+  printf '%s\n' "$@" > /tmp/nt_keys.txt
+  awk -F'\t' -v today="$DAY" '
+    FNR == NR {
+      if ($0 ~ /^#/ || $1 == "") next
+      first[$1] = $2; last[$1] = $3; runs[$1] = $4
+      if (!($1 in known)) { known[$1] = 1; order[++n] = $1 }
+      next
+    }
+    { k = $0
+      if (k in known) { last[k] = today; runs[k] = runs[k] + 1 }
+      else { known[k] = 1; order[++n] = k; first[k] = today; last[k] = today; runs[k] = 1 } }
+    END { printf "# key\tfirst_seen\tlast_seen\truns\n"
+          for (i = 1; i <= n; i++) { k = order[i]
+            printf "%s\t%s\t%s\t%d\n", k, first[k], last[k], runs[k] } }
+  ' "$SF" /tmp/nt_keys.txt > /tmp/nt_seen.new && mv /tmp/nt_seen.new "$SF"
+}
+field() { awk -F'\t' -v k="$2" '$1 == k {print $'"$3"'}' "$1"; }
+
+printf '# key\tfirst_seen\tlast_seen\truns\n' > /tmp/nt_seen.tsv
+bump_seen /tmp/nt_seen.tsv 2026-09-01 "unsigned helper x" "firewall is off"
+t_is "a new finding starts at one run"  "1"          "$(field /tmp/nt_seen.tsv 'unsigned helper x' 4)"
+t_is "and records today as first seen"  "2026-09-01" "$(field /tmp/nt_seen.tsv 'unsigned helper x' 2)"
+
+bump_seen /tmp/nt_seen.tsv 2026-09-08 "unsigned helper x"
+t_is "a recurring finding increments"          "2"          "$(field /tmp/nt_seen.tsv 'unsigned helper x' 4)"
+t_is "first_seen does NOT move"                "2026-09-01" "$(field /tmp/nt_seen.tsv 'unsigned helper x' 2)"
+t_is "last_seen does move"                     "2026-09-08" "$(field /tmp/nt_seen.tsv 'unsigned helper x' 3)"
+t_is "a finding that went away keeps its row"  "1"          "$(field /tmp/nt_seen.tsv 'firewall is off' 4)"
+t_is "and keeps the date it was last seen"     "2026-09-01" "$(field /tmp/nt_seen.tsv 'firewall is off' 3)"
+
+bump_seen /tmp/nt_seen.tsv 2026-09-15 "unsigned helper x" "firewall is off"
+t_is "a returning finding resumes its count, not a new one" "2" \
+   "$(field /tmp/nt_seen.tsv 'firewall is off' 4)"
+t_is "with its original first_seen intact" "2026-09-01" \
+   "$(field /tmp/nt_seen.tsv 'firewall is off' 2)"
+t_is "the file has one row per key, no duplicates" "" \
+   "$(grep -v '^#' /tmp/nt_seen.tsv | cut -f1 | sort | uniq -d)"
+
+############################################################
+t_section "Exit-code contract"
+############################################################
+./scripts/neptune.sh --help >/dev/null 2>&1
+t_is "--help exits 0" "0" "$?"
+./scripts/neptune.sh --not-a-real-flag >/dev/null 2>&1
+t_is "an unknown flag exits 64 (usage error), not 1" "64" "$?"
+./scripts/neptune.sh --sanitize >/dev/null 2>&1
+t_is "--sanitize without an output format exits 64" "64" "$?"
+./scripts/neptune.sh --acknowledge nonsense >/dev/null 2>&1
+t_is "a malformed --acknowledge exits 64" "64" "$?"
+
+# 0/1/2 need a full scan to reach, so assert instead that the exit branches use
+# the SAME counts, in the same order, as the verdict that is printed. A verdict
+# saying "needs attention" beside an exit code of 0 would be worse than having
+# no exit code at all.
+VERDICT_ORDER=$(sed -n '/^# Verdict\. Ordered worst-first/,/^fi$/p' scripts/neptune.sh \
+                | grep -oE 'N_(ATTENTION|UNKNOWN|NOTICE)' | tr '\n' ' ')
+EXIT_ORDER=$(sed -n '/^# Exit-code contract/,$p' scripts/neptune.sh | grep -oE 'N_(ATTENTION|UNKNOWN)' | tr '\n' ' ')
+t_is "the exit code checks attention before unknown, as the verdict does" \
+   "N_ATTENTION N_UNKNOWN " "$EXIT_ORDER"
+t_is "and the verdict checks them in that same order" \
+   "N_ATTENTION N_UNKNOWN N_NOTICE " "$VERDICT_ORDER"
+t_is "the help text documents all three exit codes" "3" \
+   "$(./scripts/neptune.sh --help 2>/dev/null | grep -cE '^  [012]  ')"
+
+############################################################
 t_section "Recorded titles must stand alone"
 ############################################################
 # A finding is printed in its scan's own output, where a following unprefixed
@@ -375,5 +503,5 @@ t_is "no recorded finding title ends mid-sentence" "" "$FRAGMENTS"
 printf '\n================================================\n'
 printf '  %d passed, %d failed\n' "$PASS" "$FAIL"
 printf '================================================\n'
-rm -f /tmp/nt_novel.txt /tmp/nt_boot2.txt /tmp/nt_exposed.txt /tmp/nt_allow.txt /tmp/nt_allow_empty.txt
+rm -f /tmp/nt_novel.txt /tmp/nt_keys.txt /tmp/nt_seen.tsv /tmp/nt_boot2.txt /tmp/nt_exposed.txt /tmp/nt_allow.txt /tmp/nt_allow_empty.txt
 [ "$FAIL" -eq 0 ]

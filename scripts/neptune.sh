@@ -63,19 +63,26 @@ Every run appends its scores to ~/.neptune/history.tsv, so the next report can
 show what moved. Delete that file to forget; nothing leaves the machine either
 way.
 
+Exit codes, so this is scriptable across machines:
+  0  healthy — nothing needs attention and every check ran
+  1  one or more findings need attention
+  2  no attention items, but some check could not run (unknown is not a pass)
+A usage error exits 64. Acknowledged findings do not affect the exit code:
+acknowledging is a statement about a known vendor quirk, not about severity.
+
 Reports go to ~/Desktop. See SECURITY.md for the full footprint and how to
 verify what this does before running it.
 USAGE
       exit 0 ;;
-    *)             echo "Unknown option: $1" >&2; exit 1 ;;
+    *)             echo "Unknown option: $1" >&2; exit 64 ;;
   esac
   shift
 done
 case "$ACK_ARG" in
-  ''|*[!0-9,]*) [ -z "$ACK_ARG" ] || { echo "--acknowledge takes finding numbers, e.g. 5 or 5,6,7" >&2; exit 1; } ;;
+  ''|*[!0-9,]*) [ -z "$ACK_ARG" ] || { echo "--acknowledge takes finding numbers, e.g. 5 or 5,6,7" >&2; exit 64; } ;;
 esac
 if $SANITIZE_OUT && ! $JSON_OUT && ! $HTML_OUT; then
-  echo "--sanitize only applies with --json or --html" >&2; exit 1
+  echo "--sanitize only applies with --json or --html" >&2; exit 64
 fi
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -101,7 +108,7 @@ FINDINGS="$TMP/findings.txt"
 export NEPTUNE_FINDINGS="$FINDINGS"
 
 if [ "$(id -u)" -eq 0 ]; then
-  echo "Run as your normal user, not with sudo."; exit 1
+  echo "Run as your normal user, not with sudo."; exit 64
 fi
 
 echo "${BOLD}Neptune full suite — $(hostname) — $(date '+%Y-%m-%d %H:%M')${RST}"
@@ -192,7 +199,37 @@ awk -F'|' -v allowfile="$ALLOW" '
     if (length(key) > 90) { key = substr(key, 1, 90); sub(/[^ ]*$/, "", key); sub(/ +$/, "", key) }
     printf "%s|%s|%s|%s|%s|%s\n", sev, cat, scan, title, key, (key in allow) ? 1 : 0
   }
-' "$FINDINGS" 2>/dev/null | awk -F'|' '!seen[$1 "|" $2 "|" $4]++' > "$SCORED"
+' "$FINDINGS" 2>/dev/null | awk -F'|' '!seen[$1 "|" $2 "|" $4]++' > "$TMP/deduped.txt"
+
+# Attach the vendor label, if any. Computed ONCE here and carried as a seventh
+# field, so the terminal listing, the HTML report and the JSON all read the same
+# answer from the same record instead of each matching the catalogue themselves.
+# That is the rule the whole findings model exists to enforce.
+#
+# This is a LABEL, never a suppression. A labelled finding is still found, still
+# listed, still counted and still deducts. See the header of vendor-quirks.tsv
+# for why that line is where it is.
+QUIRKS="$DIR/vendor-quirks.tsv"
+awk -F'\t' -v quirks="$QUIRKS" '
+  BEGIN {
+    n = 0
+    while ((getline line < quirks) > 0) {
+      if (line ~ /^#/ || line ~ /^[ \t]*$/) continue
+      split(line, f, "\t")
+      if (f[1] == "" || f[2] == "") continue
+      n++; pat[n] = f[1]; ven[n] = f[2]
+    }
+    FS = "|"
+  }
+  {
+    label = ""
+    lt = tolower($0)
+    for (i = 1; i <= n; i++) {
+      if (index(lt, pat[i]) > 0) { label = ven[i]; break }
+    }
+    print $0 "|" label
+  }
+' "$TMP/deduped.txt" > "$SCORED"
 
 # Per-category score: start at 100, deduct per unacknowledged finding, floor at 0.
 # Every deduction traces to a finding printed below — a score whose arithmetic
@@ -275,9 +312,10 @@ render_verdict() {
     esac
     if awk -F'|' -v s="$SEV" '$1==s && $6==0 {found=1} END{exit !found}' "$SCORED"; then
       echo; echo "  $HEAD"
-      while IFS='|' read -r _sev _cat _scan _title _rest; do
+      while IFS='|' read -r _sev _cat _scan _title _key _ack _vendor; do
         NUM=$((NUM + 1))
         printf '   %2d. [%s] %s\n' "$NUM" "$_cat" "$_title"
+        [ -n "${_vendor:-}" ] && printf '       known %s pattern — see the HTML report for what it is\n' "$_vendor"
       done <<EOF_F
 $(awk -F'|' -v s="$SEV" '$1==s && $6==0' "$SCORED")
 EOF_F
@@ -327,6 +365,7 @@ EOF_F
 # render <json|html> <sanitize 0|1>
 render() {
   NEP_MODE=$1 NEP_SANITIZE=$2 NEP_HISTORY="$HISTORY" NEP_VERDICT="$VERDICT" \
+  NEP_SEEN="$SEEN" NEP_QUIRKS="$QUIRKS" \
   python3 - "$SCORED" "$SCORES" "$VKEY" <<'PY'
 import html, json, os, re, shlex, subprocess, sys, datetime
 
@@ -334,6 +373,8 @@ scored, scores, vkey = sys.argv[1], sys.argv[2], sys.argv[3]
 mode     = os.environ.get("NEP_MODE", "json")
 san      = os.environ.get("NEP_SANITIZE") == "1"
 histfile = os.environ.get("NEP_HISTORY", "")
+seenfile = os.environ.get("NEP_SEEN", "")
+quirkfile = os.environ.get("NEP_QUIRKS", "")
 verdict  = os.environ.get("NEP_VERDICT", "")
 # A missing command must degrade to "?" rather than take the report down with
 # it. This also lets the renderer be exercised on the Linux CI runner, where
@@ -551,6 +592,27 @@ for line in records(scores):
     if f[0] == "score": sc[f[1]] = int(f[2]); ack[f[1]] = int(f[3])
     elif f[0] == "count": counts[f[1]] = int(f[2])
 
+# Vendor notes, keyed by the vendor name the shell already matched. The shell
+# decided WHICH vendor (one matcher, one answer, carried in the record); this
+# only looks up the sentence that goes with it.
+vendor_note = {}
+if quirkfile and os.path.exists(quirkfile):
+    for line in records(quirkfile):
+        if line.startswith("#") or not line.strip(): continue
+        col = line.rstrip("\n").split("\t")
+        if len(col) >= 3 and col[1] not in vendor_note:
+            vendor_note[col[1]] = col[2]
+
+seen = {}
+if seenfile and os.path.exists(seenfile):
+    for line in records(seenfile):
+        if line.startswith("#") or not line.strip(): continue
+        col = line.rstrip("\n").split("\t")
+        if len(col) >= 4:
+            try: runs = int(col[3])
+            except ValueError: continue
+            seen[col[0]] = {"first_seen": col[1], "last_seen": col[2], "runs": runs}
+
 findings = []
 for line in records(scored):
     f = line.rstrip("\n").split("|")
@@ -558,6 +620,13 @@ for line in records(scored):
     title = clean(f[3])
     rec = {"severity": f[0], "category": f[1], "scan": f[2], "title": title,
            "key": f[4], "acknowledged": f[5] == "1"}
+    ven = f[6] if len(f) > 6 else ""
+    if ven:
+        rec["vendor"] = {"name": ven, "note": vendor_note.get(ven, "")}
+    hist = seen.get(f[4])
+    if hist:
+        rec["first_seen"] = hist["first_seen"]
+        rec["runs"] = hist["runs"]
     rec["advice"] = advise(f[3])
     if san:
         for c in rec["advice"]["commands"]:
@@ -663,6 +732,12 @@ details.f>summary::-webkit-details-marker{display:none}
 details.f>summary::before{content:"\\25B8";color:var(--mute);flex:0 0 auto}
 details.f[open]>summary::before{content:"\\25BE"}
 .num{color:var(--mute);flex:0 0 auto;font-variant-numeric:tabular-nums}
+.vendor{display:inline-block;font-size:10px;text-transform:uppercase;letter-spacing:.08em;
+padding:2px 6px;border-radius:3px;border:1px solid var(--line);color:var(--accent);
+vertical-align:2px;margin-right:6px}
+.streak{font-size:12px;color:var(--mute);margin:10px 0 0}
+.vnote{background:var(--code);border-left:3px solid var(--accent);padding:10px 12px;
+border-radius:0 5px 5px 0;margin:12px 0 0;font-size:14px}
 .tag{display:inline-block;font-size:10px;text-transform:uppercase;letter-spacing:.08em;
 padding:2px 6px;border-radius:3px;background:var(--code);color:var(--mute);
 vertical-align:2px;margin-right:6px}
@@ -731,9 +806,24 @@ for sev, heading, blurb in SEV_ORDER:
             num += 1
             label = "%d." % num
         a = f["advice"]
+        ven = f.get("vendor", {})
         W('<details class="f"%s><summary><span class="num">%s</span><span>'
-          '<span class="tag">%s</span>%s</span></summary><div class="body">'
-          % (' open' if sev == "attention" else '', label, e(f["category"]), e(f["title"])))
+          '<span class="tag">%s</span>%s%s</span></summary><div class="body">'
+          % (' open' if sev == "attention" else '', label, e(f["category"]),
+             ('<span class="vendor">known %s pattern</span>' % e(ven["name"])) if ven else "",
+             e(f["title"])))
+        if ven and ven.get("note"):
+            W('<div class="vnote"><strong>%s.</strong> %s This is a label, not a '
+              'dismissal: the finding is still counted and still costs points. '
+              'Acknowledging it is a decision about your machine, and stays yours '
+              'to make.</div>' % (e(ven["name"]), e(ven["note"])))
+        if f.get("runs", 0) > 1:
+            W('<p class="streak">Seen in %d runs, first on %s. %s</p>'
+              % (f["runs"], e(f.get("first_seen", "?")),
+                 "Still here after everything you have done since."
+                 if f["runs"] >= 4 else "Not new."))
+        elif f.get("runs") == 1:
+            W('<p class="streak">First seen in this run.</p>')
         if a.get("unmapped"):
             W('<p>No stock explanation for this one — it is a finding shape the '
               'remediation table does not cover yet. The full text report has the '
@@ -848,9 +938,9 @@ if [ -n "$ACK_ARG" ]; then
   if [ -n "$BAD" ]; then
     echo "No finding numbered:$BAD in this run (1-${AVAIL} available)." >&2
     echo "Numbers come from the listing a plain ./neptune.sh run prints." >&2
-    exit 1
+    exit 64
   fi
-  while IFS='|' read -r _SEV _CAT _SCAN TITLE KEY _ACK; do
+  while IFS='|' read -r _SEV _CAT _SCAN TITLE KEY _ACK _VENDOR; do
     printf '%s\n' "$KEY" >> "$ALLOW"
     echo "Acknowledged: $TITLE"
   done < "$RESOLVED"
@@ -872,6 +962,41 @@ FINAL="$TMP/final.txt"
   tail -n +5 "$REPORT"
 } > "$FINAL"
 mv "$FINAL" "$REPORT"
+
+# Per-finding history. "Flagged" and "flagged in each of the last six runs" are
+# different statements, and only the second one tells you whether anything you
+# did helped. Keyed the same way --acknowledge is, so the entry survives the
+# PIDs, ports and versions that change every run.
+#
+# Updated BEFORE rendering, unlike history.tsv, and for the opposite reason:
+# here the report should say how many runs including this one have seen the
+# finding, whereas there "previous run" has to mean the one before this.
+#
+# A finding that stops appearing keeps its row with its last-seen date. That is
+# the record of something being fixed, which is worth more than the few bytes.
+SEEN="$NEPTUNE_HOME/seen.tsv"
+[ -f "$SEEN" ] || printf '# key\tfirst_seen\tlast_seen\truns\n' > "$SEEN"
+awk -F'|' '{print $5}' "$SCORED" | sort -u | grep -v '^$' > "$TMP/keys.txt"
+awk -F'\t' -v today="$(date '+%Y-%m-%d')" '
+  FNR == NR {
+    if ($0 ~ /^#/ || $1 == "") next
+    first[$1] = $2; last[$1] = $3; runs[$1] = $4
+    if (!($1 in known)) { known[$1] = 1; order[++n] = $1 }
+    next
+  }
+  {
+    k = $0
+    if (k in known) { last[k] = today; runs[k] = runs[k] + 1 }
+    else { known[k] = 1; order[++n] = k; first[k] = today; last[k] = today; runs[k] = 1 }
+  }
+  END {
+    printf "# key\tfirst_seen\tlast_seen\truns\n"
+    for (i = 1; i <= n; i++) {
+      k = order[i]
+      printf "%s\t%s\t%s\t%d\n", k, first[k], last[k], runs[k]
+    }
+  }
+' "$SEEN" "$TMP/keys.txt" > "$TMP/seen.new" && mv "$TMP/seen.new" "$SEEN"
 
 SAN=$( $SANITIZE_OUT && echo 1 || echo 0 )
 
@@ -902,4 +1027,14 @@ if ! $HTML_OUT; then
   echo "For a readable report with what each finding means and what to do:"
   echo "  ./neptune.sh --html"
 fi
-exit 0
+
+# Exit-code contract. Ordered the same way the verdict is, and for the same
+# reason: a check that could not run outranks a minor finding, because an
+# unknown is not a pass. Acknowledged findings deliberately do not enter this —
+# acknowledging says "this is a known vendor quirk", not "this is not a
+# problem", and a machine that exits 0 because its owner silenced everything
+# would make the exit code a worse signal than no exit code.
+if   [ "${N_ATTENTION:-0}" -gt 0 ]; then exit 1
+elif [ "${N_UNKNOWN:-0}"   -gt 0 ]; then exit 2
+else                                     exit 0
+fi
