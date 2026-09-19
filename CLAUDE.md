@@ -81,7 +81,7 @@ CLAUDE.md        this file
 
 | Script | Role | Mutates? |
 |---|---|---|
-| `neptune.sh` | Master runner — verdict, scores, `--json`, one combined report | `~/.neptune/allow` with `--acknowledge` |
+| `neptune.sh` | Master runner — verdict, scores, `--json`, `--html`, one combined report | `~/.neptune/allow` with `--acknowledge`; appends `~/.neptune/history.tsv` every run |
 | `sentry.sh` | Baseline diff, process→network map, staleness | baseline files only |
 | `redflag_scan.sh` | Deep audit: persistence, listeners, interception | no |
 | `audit_system.sh` | Resources, persistence, disk | no |
@@ -98,6 +98,14 @@ CLAUDE.md        this file
 - **Match the existing style.** Colour helpers (`ok`/`warn`/`flag`/`unknown`),
   section headers, and the `[ok]/[!!]/[FLAG]/[XX]` prefixes are consistent across
   scripts — keep them.
+- **One renderer, one remediation table.** `--json` and `--html` come out of a
+  single python block in `neptune.sh`. The remediation table inside it is the
+  only place that says "here is what to do about X"; do not add a second copy
+  for a new output format. Its rules: no generated commands, no pipelines or
+  chains, every command labelled `look`/`setting`/`software`/`neptune`, and an
+  honest "no automated suggestion" where none exists. `tests/unit.sh` asserts
+  all of that against the real table, extracted from this file rather than
+  re-implemented.
 - **Findings are recorded, not scraped.** Each scan's `flag`/`warn`/`unknown`
   helper also calls `record <severity> "<title>"`, which appends
   `severity|category|scan|title` to `$NEPTUNE_FINDINGS` when the master runner

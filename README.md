@@ -60,7 +60,7 @@ verify all of it yourself before running anything, is in
 
 | Script | Elevates | Writes | Leaves your network |
 |---|---|---|---|
-| `neptune.sh` | prompts once, shared with children | report to Desktop; `~/.neptune/allow`; JSON with `--json` | — |
+| `neptune.sh` | prompts once, shared with children | reports to Desktop; `~/.neptune/allow`; `~/.neptune/history.tsv` (scores per run); JSON with `--json`; HTML with `--html` | — |
 | `sentry.sh` | `lsof` | report to Desktop, baseline in `~/.sentry` | ping, DNS, traceroute |
 | `redflag_scan.sh` | `lsof`, root crontab, profiles | report to Desktop | — |
 | `audit_system.sh` | `du` on system paths | nothing | — |
@@ -84,6 +84,7 @@ chmod +x *.sh
 xattr -d com.apple.quarantine *.sh 2>/dev/null   # if macOS quarantines them
 
 ./neptune.sh          # run the full read-only suite
+./neptune.sh --html   # ...and a readable report you can hand to someone
 ```
 
 You get a verdict first, then the detail:
@@ -105,6 +106,55 @@ You get a verdict first, then the detail:
   COULD NOT BE CHECKED  (treat as unknown, not clean)
     3. [security] Application firewall state could not be determined
 ```
+
+### The readable report
+
+`--html` writes a second report next to the text one. Same findings, same
+numbers, but each one opens into what it means in plain English, what to do
+about it, and the command to do it — labelled `reads only`, `changes a setting`,
+`installs or removes software`, or `Neptune command`, so you always know what
+you are about to run before you run it.
+
+Nothing in that report is generated. Every command is one you can look up in
+`man` or Apple's documentation, or is Neptune's own. Where there is no honest
+one-command answer — double NAT is a router setting, high Wi-Fi latency is
+physics — it says so instead of inventing one.
+
+The file has **no JavaScript, no external stylesheet, no webfont and no image
+request**. Opening it makes no network connections, and it reads fine in a text
+editor. A security report you must trust in order to read is not much of a
+security report:
+
+```bash
+grep -ci '<script' ~/Desktop/neptune_report_*.html    # expect: 0
+grep -c 'https\?://' ~/Desktop/neptune_report_*.html  # expect: 0
+```
+
+### Working with an AI assistant
+
+`--json` exports the same findings — severity, category, and the same
+explanation and commands the HTML shows — in a form a model reads far more
+reliably than a screenshot of a terminal. `--sanitize` replaces your hostname,
+username, home-directory paths, IPs and MACs first:
+
+```bash
+./neptune.sh --json --sanitize
+```
+
+Attach the file and ask for a plan in priority order, with one constraint worth
+stating explicitly: *recommend Neptune's own commands or documented
+single-purpose macOS commands; do not give me shell to paste that I cannot look
+up.* A model asked for "the fix" will happily invent a `sudo` one-liner, and a
+command you cannot verify is the thing this tool exists to argue against. The
+HTML report carries that prompt verbatim so you can copy it. See
+[`docs/advisor.md`](docs/advisor.md) for the full workflow.
+
+### Re-running
+
+Every run appends its scores to `~/.neptune/history.tsv`, so the next report
+shows what each category did since last time. That is the loop the tool is built
+around: audit, understand, act, re-measure. It is ten numbers and a date per
+run, it never leaves the machine, and `rm ~/.neptune/history.tsv` ends it.
 
 Legitimate vendor software routinely fails code-signing checks. Tell Neptune
 once and it stops counting against you:

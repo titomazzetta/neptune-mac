@@ -9,6 +9,49 @@ explains each in full — symptom, root cause, fix, and what was learned.
 
 ---
 
+## Readable reports and the re-measure loop — 2026-09-19
+
+The verdict layer answered "is this machine OK?". This answers "so what do I do,
+and did it help?".
+
+### Added
+- **`--html`** — a readable report next to the text one. Every finding opens
+  into what it means, what to do, and the command to do it, each command
+  labelled `reads only` / `changes a setting` / `installs or removes software` /
+  `Neptune command`. No JavaScript, no external stylesheet, no webfont, no image
+  request: opening it makes no network connections, and CI asserts that.
+- **Remediation table**, shared by `--json` and `--html` from a single renderer.
+  Nothing generated, no pipelines or chains, and an honest "no automated
+  suggestion" where none exists. `tests/unit.sh` asserts all three rules against
+  the real table, extracted from `neptune.sh` rather than re-implemented.
+- **`~/.neptune/history.tsv`** — one tab-separated line per run: date, verdict,
+  four scores, four counts. The next HTML report shows what each category did
+  since last time. Local plain text, nothing about individual findings, deleted
+  with one `rm`.
+- **`--sanitize` now applies to `--html`** as well as `--json`, and replaces any
+  `/Users/<name>` path rather than only the one matching `$USER` — a finding can
+  name another account's home directory, and "the variable happened to match" is
+  not a sanitiser.
+- **CI renderer smoke test** — builds JSON and HTML from the real-world fixture
+  on every push and asserts the HTML is well-formed, script-free and
+  self-contained.
+
+### Fixed
+- **`--json` crashed on the first finding of a real report.** The acknowledge
+  key was truncated with `substr(key, 1, 90)`, which counts bytes; cutting an
+  em-dash in half left an invalid UTF-8 sequence that python refused to decode.
+  Truncation now cuts back to the previous space, and records are read with
+  `errors="replace"`. (Bug 10)
+- `codesign -dvv` suggestions pointed at the `.plist` rather than the binary it
+  launches, which tells you nothing about the signature.
+
+### Note on upgrading
+The acknowledge-key change affects keys longer than 90 characters, which now end
+at a word boundary. If you have acknowledged a long finding, re-acknowledge it
+once. `~/.neptune/allow` is a plain text file you can also edit by hand.
+
+---
+
 ## First full run of the verdict layer — 2026-09-18
 
 The verdict layer shipped, then ran end to end on a live Mac for the first time.

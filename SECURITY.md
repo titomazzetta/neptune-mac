@@ -95,6 +95,25 @@ you ask for it) structured findings:
 | `~/.sentry/format` | baseline format version | `sentry.sh` |
 | `~/.neptune/allow` | findings you acknowledged as known-good | `neptune.sh --acknowledge` |
 | `~/Desktop/neptune_findings_*.json` | structured findings | `neptune.sh --json` |
+| `~/Desktop/neptune_report_*.html` | readable report with remediation | `neptune.sh --html` |
+| `~/.neptune/history.tsv` | one line per run: date, verdict, four scores, four counts | every `neptune.sh` run |
+
+`history.tsv` deserves its own sentence, because a file that accumulates is the
+shape telemetry usually takes. It is tab-separated plain text, it holds ten
+numbers and a date per run and nothing about individual findings, it never
+leaves the machine, and `rm ~/.neptune/history.tsv` ends it with no other
+consequence than losing the comparison in the next HTML report. It exists so a
+second run can answer "did what I did help?" — a findings list alone cannot.
+
+The HTML report contains **no JavaScript, no external stylesheet, no webfont and
+no image request**. Opening it makes no network connections, and you can read
+the whole file in a text editor. That is deliberate: a security report you have
+to trust in order to read is not much of a security report. Verify it:
+
+```bash
+grep -ci '<script' ~/Desktop/neptune_report_*.html    # expect: 0
+grep -c 'https\?://' ~/Desktop/neptune_report_*.html  # expect: 0
+```
 
 **Reports contain sensitive information about your machine**: hostname, your
 username in file paths, LAN addresses, your installed application inventory, and
@@ -102,9 +121,11 @@ every listening port. Treat a report like a system inventory, because that is wh
 it is. `docs/sample-report.txt` shows the shape of one with those values replaced.
 
 The same applies to `--json` output, which is likely to get pasted somewhere —
-into an issue, a chat window, an LLM. Use `--json --sanitize` for anything
-leaving the machine: it replaces hostname, username, IP addresses and MAC
-addresses, so you share the findings without the fingerprint. Neptune does not
+into an issue, a chat window, an LLM. Use `--sanitize` for anything
+leaving the machine — it applies to `--json` and `--html` alike, and replaces
+hostname, username, every `/Users/<name>` path regardless of whose it is, IP
+addresses and MAC addresses, so you share the findings without the
+fingerprint. Neptune does not
 upload either file anywhere; moving it is your decision and your action.
 
 ### Removing Neptune completely
@@ -114,7 +135,8 @@ rm -rf ~/.sentry ~/.neptune           # the only state it keeps
 rm -f ~/Desktop/neptune_full_report_*.txt \
       ~/Desktop/sentry_report_*.txt \
       ~/Desktop/redflag_report_*.txt \
-      ~/Desktop/neptune_findings_*.json   # your reports
+      ~/Desktop/neptune_findings_*.json \
+      ~/Desktop/neptune_report_*.html      # your reports
 rm -rf /path/to/neptune-mac           # the repo itself
 ```
 

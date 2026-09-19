@@ -523,6 +523,111 @@ each other where they could not be missed.
 
 ---
 
+## Bug 10 — `--json` would have crashed on the very first finding
+
+**Symptom.** None, for weeks — because nobody ran the flag. Building the HTML
+report meant feeding the renderer a realistic findings file for the first time,
+and python stopped on line one:
+
+```
+UnicodeDecodeError: 'utf-8' codec can't decode bytes in position 360-361:
+invalid continuation byte
+```
+
+**Cause.** Every finding gets an acknowledge key: the title, lowercased, digits
+collapsed to `#`, truncated to 90 characters so it stays a manageable line in
+`~/.neptune/allow`. The truncation was `substr(key, 1, 90)`.
+
+`substr` in awk counts **bytes**. These titles are full of em-dashes, and an
+em-dash is three bytes (`\xe2\x80\x94`). Byte 90 landed in the middle of one,
+leaving a lone `\xe2\x80` in the record — a sequence that is not valid UTF-8.
+The awk that wrote it did not care. The python that read it back opened the file
+in text mode and died.
+
+The finding it happened on was not an edge case. It was item 1 of the real
+2026-09-18 report:
+
+```
+Unsigned process with network access: WavesLoca (pid 4500) — sig:UNSIGNED — outbound:3 — LISTENING on: ...
+```
+
+So `./neptune.sh --json` on the author's own machine, the machine every other
+bug in this log was found on, would have produced a traceback instead of a file.
+
+**Fix.** Two parts, doing different jobs.
+
+Cut back to the last space inside the 90 bytes. A space is ASCII, so a cut there
+can never land inside a character:
+
+```awk
+if (length(key) > 90) { key = substr(key, 1, 90); sub(/[^ ]*$/, "", key); sub(/ +$/, "", key) }
+```
+
+And read every record with `errors="replace"`, so a bad byte from an older
+`allow` file costs one garbled character in one field rather than the whole
+report. The first fix stops producing the problem; the second stops the reader
+being the thing that dies over it. Neither is a substitute for the other.
+
+**Lessons.**
+
+1. **A flag nobody has run is not a feature, it is a claim.** `--json` had been
+   documented in the README, described in `docs/advisor.md`, and recommended as
+   the AI-advisor workflow. It had never once been executed against real
+   findings. Testing it took under a minute and found a total failure.
+2. **Byte-oriented tools and character-oriented tools meet at the file.** awk
+   counts bytes, python decodes characters, and the handoff between them is
+   where this lived. Any fixed-width truncation in a pipeline that eventually
+   hits a UTF-8 decoder is this bug waiting for a wide enough character — and
+   these reports are full of them, because the output style uses em-dashes
+   everywhere.
+3. **Write the test against the reproduction, not the fix.** `tests/unit.sh`
+   asserts both that the corrected key decodes *and* that the old byte-cut still
+   corrupts that exact title. Without the second half, a future change to the
+   fixture could make the test pass while testing nothing — which is the harness
+   failure from the Bug 8 pass, in a new costume.
+
+---
+
+## What the HTML report is for, and what it deliberately is not
+
+The verdict layer answered "is this machine OK?". The next honest question is
+"so what do I do?", and a findings list does not answer it. `--html` does:
+every finding opens into what it means in plain English, what to do, and the
+command to do it, labelled `reads only` / `changes a setting` / `installs or
+removes software` / `Neptune command`.
+
+Three constraints shaped it, and they are the interesting part.
+
+**Nothing is generated.** The remediation text is a table keyed by finding
+shape. Every command in it is one a person can look up in `man` or Apple's
+documentation, or is Neptune's own. No command is a pipeline or a chain — a
+rule `tests/unit.sh` asserts against the real table rather than trusting.
+Where there is no honest one-command answer, the entry says so: double NAT is a
+router setting, high Wi-Fi latency is physics, and a tool that invents a fix for
+those is a tool you stop believing about the ones it can fix.
+
+**One renderer.** `--json` and `--html` are the same python block. The
+remediation table would otherwise be the fourth thing in this project to exist
+in two copies and drift — after the digest that re-derived findings from prose
+(Bug 8), the scoring awk transcribed into the test file (now pinned by an
+assertion), and the two scans that disagreed about gateway latency (Bug 9c).
+
+**No JavaScript, no external stylesheet, no webfont, no image request.**
+Opening the report makes no network connections, and the whole file reads in a
+text editor. This is not minimalism for its own sake. Neptune's entire argument
+is that a security tool should be verifiable by the person running it; shipping
+its findings inside a document that phones a CDN on open would contradict that
+in the most literal way available. CI asserts it on every push.
+
+What it is *not*: an agent. The report ends by explaining how to hand the JSON
+to a model and what to constrain it to — recommend Neptune's own commands or
+documented single-purpose ones, never novel shell to paste unread — which is
+the same boundary `docs/advisor.md` draws. Observe, decide, act, with the human
+at the act boundary. The tool does not cross it on your behalf, and neither
+should anything you point at its output.
+
+---
+
 ## Cross-cutting practices that came out of these
 
 - **CI as a regression net for exactly these bugs.** The pipeline runs shellcheck,
