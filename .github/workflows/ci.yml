@@ -70,6 +70,47 @@ jobs:
           # see the header of tests/unit.sh.
           ./tests/unit.sh
 
+      - name: Renderer smoke test (JSON and HTML from a fixture)
+        run: |
+          # The renderer behind --json and --html is a python block inside
+          # neptune.sh. Exercise it against the real-world findings fixture so a
+          # broken format string or a bad regex fails here rather than on
+          # someone's Mac at the end of a five-minute scan.
+          set -e
+          mkdir -p /tmp/rt
+          awk -F'|' 'NF>=4 { key=tolower($4); gsub(/[0-9]+/,"#",key)
+                if (length(key)>90) { key=substr(key,1,90); sub(/[^ ]*$/,"",key); sub(/ +$/,"",key) }
+                printf "%s|%s|%s|%s|%s|0\n", $1,$2,$3,$4,key }' \
+            tests/fixtures/findings-realworld.txt > /tmp/rt/scored.txt
+          printf 'score|security|72|0\nscore|network|84|0\nscore|bloat|100|0\nscore|maintenance|96|0\ncount|attention|4\ncount|notice|2\ncount|unknown|1\ncount|info|0\ncount|acknowledged|0\n' > /tmp/rt/scores.txt
+          { echo 'set -u'
+            echo 'SCORED=/tmp/rt/scored.txt; SCORES=/tmp/rt/scores.txt'
+            echo 'HISTORY=/tmp/rt/history.tsv; VKEY=needs_attention; VERDICT="NEEDS ATTENTION"'
+            sed -n '/^render() {/,/^}$/p' scripts/neptune.sh
+            echo 'render "$1" "$2"'
+          } > /tmp/rt/drive.sh
+          bash /tmp/rt/drive.sh json 0 | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["findings"], "no findings"; print("  ok  JSON parses,", len(d["findings"]), "findings")'
+          bash /tmp/rt/drive.sh json 1 | python3 -c 'import json,sys; json.load(sys.stdin); print("  ok  sanitized JSON parses")'
+          bash /tmp/rt/drive.sh html 0 > /tmp/rt/out.html
+          python3 - <<'CHECK'
+          import re, html.parser
+          h = open('/tmp/rt/out.html', encoding='utf-8').read()
+          assert '<script' not in h.lower(), 'HTML report must contain no JavaScript'
+          ext = re.findall(r'(?:src|href)\s*=\s*"(?!#)[^"]*"', h)
+          assert not ext, 'HTML report must have no external references: %s' % ext
+          assert '@import' not in h and 'url(' not in h, 'no external CSS resources'
+          class P(html.parser.HTMLParser):
+              def __init__(s): super().__init__(); s.stack=[]; s.bad=[]
+              def handle_starttag(s,t,a):
+                  if t not in ('meta','br','hr','img','input','link'): s.stack.append(t)
+              def handle_endtag(s,t):
+                  if s.stack and s.stack[-1]==t: s.stack.pop()
+                  else: s.bad.append(t)
+          p=P(); p.feed(h)
+          assert not p.bad and not p.stack, 'unbalanced tags: %s %s' % (p.bad, p.stack)
+          print('  ok  HTML is well formed, script-free and self-contained (%d bytes)' % len(h))
+          CHECK
+
       - name: Verify destructive scripts still require confirmation
         run: |
           # Guardrail: the two mutating scripts must contain an interactive

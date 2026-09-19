@@ -306,6 +306,43 @@ t_is "key is truncated, not passed through" "yes" \
 t_is "key has no trailing space" "" "$(printf '%s' "$K" | grep -o ' $' || true)"
 
 ############################################################
+t_section "Remediation advice covers what we have actually seen"
+############################################################
+# advice_coverage.py executes the real remediation table out of neptune.sh
+# rather than re-implementing it — one table, one source, no drift. It fails
+# loudly if its extraction markers stop matching, because a test that quietly
+# stops testing is the harness bug all over again.
+t_is "every finding in the real-world fixture gets advice" \
+   "" "$(python3 tests/advice_coverage.py "$FIX/findings-realworld.txt")"
+
+printf 'attention|security|x|A finding shape Neptune has never emitted\n' > /tmp/nt_novel.txt
+t_is "an unrecognised finding is reported as unmapped, not silently blank" \
+   "A finding shape Neptune has never emitted" \
+   "$(python3 tests/advice_coverage.py /tmp/nt_novel.txt)"
+
+# Every command the table offers must be a single command, not a pipeline or a
+# chain. The table's own stated rule; assert it rather than trusting it.
+PIPED=$(python3 - <<'ADV'
+import sys
+sys.argv = ["x", "/dev/null", "/dev/null", "healthy"]
+src = open("scripts/neptune.sh", encoding="utf-8").read()
+body = src[src.index("import html, json, os, re, shlex"):
+           src.index("# ---------------------------------------------------------------------------\nsc, ack, counts")]
+ns = {"__name__": "t"}
+exec(compile(body, "renderer", "exec"), ns)
+bad = []
+for pat, means, do, cmdf in ns["REMEDIATION"]:
+    for c, kind, eff in cmdf("UNSIGNED persistence: x runs /Library/Foo/bar (/Library/LaunchDaemons/x.plist)"):
+        if any(ch in c for ch in ("|", ";", "&&", ">", "`", "$(")):
+            bad.append(c)
+        if kind not in ("look", "setting", "software", "neptune"):
+            bad.append("bad kind: " + kind)
+print("\n".join(bad))
+ADV
+)
+t_is "no remediation command is a pipeline, chain or substitution" "" "$PIPED"
+
+############################################################
 t_section "Recorded titles must stand alone"
 ############################################################
 # A finding is printed in its scan's own output, where a following unprefixed
@@ -338,5 +375,5 @@ t_is "no recorded finding title ends mid-sentence" "" "$FRAGMENTS"
 printf '\n================================================\n'
 printf '  %d passed, %d failed\n' "$PASS" "$FAIL"
 printf '================================================\n'
-rm -f /tmp/nt_boot2.txt /tmp/nt_exposed.txt /tmp/nt_allow.txt /tmp/nt_allow_empty.txt
+rm -f /tmp/nt_novel.txt /tmp/nt_boot2.txt /tmp/nt_exposed.txt /tmp/nt_allow.txt /tmp/nt_allow_empty.txt
 [ "$FAIL" -eq 0 ]
