@@ -9,6 +9,53 @@ explains each in full — symptom, root cause, fix, and what was learned.
 
 ---
 
+## Testing the dangerous parts — 2026-09-19
+
+The six gaps from the 2026-09-19 review, closed.
+
+### Added
+- **`tests/blast_radius.sh`** — a fake macOS layout with deliberately colliding
+  decoy paths, asserting that the destructive scripts find everything belonging
+  to the target and nothing else. Includes a real sandboxed removal compared
+  against the dry-run listing. 25 assertions, in CI.
+- **`--dry-run`** on `uninstall.sh` and `remove_mackeeper.sh` — prints the exact
+  delete set and stops, before the confirmation and before `sudo` is requested.
+- **`NEPTUNE_ROOT`** — a path prefix for the destructive scripts, used by the
+  harness. Can only narrow what they reach; refuses `sudo` while set; refuses to
+  run if `HOME` is outside it or contains `..`.
+- **Exit codes**: 0 healthy, 1 needs attention, 2 a check could not run, 64
+  usage error. Acknowledged findings do not affect them.
+- **`~/.neptune/seen.tsv`** — first seen, last seen and run count per finding,
+  so a report can say "seen in 6 runs, first on 2026-09-01" instead of
+  "flagged". Rows survive a finding going away, as the record that it was fixed.
+- **`scripts/vendor-quirks.tsv`** — a catalogue naming software that routinely
+  trips the signature checks (Waves, Sonarworks, Docker, PACE/iLok and others),
+  with a sentence each. A label, never a suppression: matched findings are still
+  counted and still deduct. Surfaced in the terminal listing, the HTML report
+  and the JSON.
+- **Tested-on matrix** in the README, stating which macOS versions have actually
+  run which scripts, and which have not.
+
+### Fixed
+- **`./uninstall.sh Mail` would have deleted MailMate's data.** Discovery
+  matched the app name as a bare substring, so removing one app selected files
+  belonging to any app whose name contains it. The term now has to match as a
+  whole word. Near misses are shown under their own heading rather than silently
+  dropped. (Bug 11)
+- **`remove_mackeeper.sh` asked before it looked.** It confirmed, then
+  discovered, deactivated, killed and deleted while narrating — so the user
+  agreed to a description rather than to a list, which is the one rule both
+  destructive scripts are supposed to follow. Inventory now happens first and
+  nothing mutates until the full list is on screen.
+- The sandbox containment guard accepted `$ROOT/../elsewhere`, because a prefix
+  check is not containment. Found by the harness, minutes after being written.
+
+### Documented
+- `socketfilterfw`'s deprecation path, and why the firewall check degrades to
+  *unknown* rather than to *fine*.
+
+---
+
 ## Readable reports and the re-measure loop — 2026-09-19
 
 The verdict layer answered "is this machine OK?". This answers "so what do I do,

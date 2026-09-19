@@ -628,6 +628,117 @@ should anything you point at its output.
 
 ---
 
+## Bug 11 — `./uninstall.sh Mail` would have taken MailMate with it
+
+**Symptom.** None, ever, on the author's machine — and that is the point of this
+entry. It was found by the first test ever written for the destructive scripts,
+within seconds of that test existing.
+
+**Cause.** File discovery matched the app name as a bare substring:
+
+```bash
+find "$DIR" -maxdepth 1 -iname "*${SHORTNAME}*"
+```
+
+For a fixture app called `Dovetail`, that selected for deletion:
+
+```
+~/Library/Preferences/com.acme.dovetailpro.plist     # a DIFFERENT app
+~/Library/Caches/com.acmecorp.dovetailer             # a different VENDOR
+```
+
+Translated to software people actually have: `./uninstall.sh Mail` selects
+MailMate's and Mailplane's data. `./uninstall.sh Notes` selects Notespark's.
+`./uninstall.sh Slack` is fine; `./uninstall.sh Box` is a disaster.
+
+Everything is shown before deletion, so a careful reader would catch it. But
+"the user will notice" is not a safety property, it is a hope — and the list on
+screen is long, the entries are cryptic Library paths, and the user has already
+decided to delete this app before they start reading.
+
+**Fix.** The term must match as a whole word: bounded at both ends by a
+non-alphanumeric character, or by the start or end of the filename. Every real
+shape still matches — `Dovetail`, `Dovetail Helper`, `com.acme.dovetail.plist` —
+while `dovetailpro` and `acmecorp.dovetailer` do not.
+
+Near misses are collected and displayed under their own heading rather than
+silently dropped. "The script considered this and excluded it" is information
+the person reviewing a delete list should have; quietly doing less than expected
+is its own kind of surprise, and it is the thing that makes people stop trusting
+a tool they cannot predict.
+
+**The actual lesson is about the test, not the bug.**
+
+Before this, the only automated check on the two scripts that run `rm -rf` as
+root was:
+
+```yaml
+- name: Verify destructive scripts still require confirmation
+  run: grep -qE 'read -r?.*\[y/N\]' "$f"
+```
+
+That verifies the safety gate exists. It says nothing whatsoever about what is
+behind the gate — and the risk in an uninstaller was never a missing prompt. It
+is a glob that matches one character too many. Every other part of Neptune had
+fixture tests; the only part that can destroy data had a grep for a prompt.
+
+Three things made the harness possible, and all three were worth having anyway:
+
+1. **`--dry-run`**, which prints the delete set and stops before the prompt and
+   before `sudo`. It is the exact opposite of a `--yes` flag — it lets you see
+   the blast radius without agreeing to it — which is why adding it to a
+   destructive script is safe where adding a skip-confirmation flag would not
+   be.
+2. **`NEPTUNE_ROOT`**, a prefix for every system path the scripts touch. It can
+   only narrow what they reach, and while it is set `sudo` is refused outright.
+   The harness points it at a temp directory holding a fake `/Applications`,
+   `/Library` and home.
+3. **A hostile fixture.** The decoys share the target's name as a substring, its
+   vendor, and its bundle-id prefix, because those are the three ways this goes
+   wrong. A fixture that cannot fail is decoration.
+
+The harness also asserts that a real sandboxed removal deletes exactly what the
+dry run listed — a dry run that disagrees with the delete stage would be worse
+than not having one — and it immediately found a hole in the containment guard
+written minutes earlier: a prefix check is not containment, because
+`$ROOT/../elsewhere` starts with `$ROOT/` and escapes it.
+
+Two defects, in two different pieces of code, from one afternoon of writing the
+test that should have existed first.
+
+---
+
+## What the vendor catalogue is, and the line it does not cross
+
+Eleven attention findings on a clean, working Mac; six of them Waves,
+Sonarworks, Docker and PACE/iLok shipping unsigned helpers. Every new user hits
+that wall on their first run with no way to tell "this vendor has always done
+this" from "something is wrong". `PHILOSOPHY.md` says a scanner you learn to
+ignore is worse than none, and an unexplained wall of red is how that happens.
+
+`scripts/vendor-quirks.tsv` names them: a pattern, a vendor, and one sentence
+about what the software does and why it looks like that.
+
+What it deliberately does **not** do is acknowledge them. The finding is still
+found, still listed, still counted, and still deducts from the score. The reason
+is the line this whole project is built along:
+
+> "Docker ships an unsigned root helper" is a fact about Docker.
+> "That is fine on my machine" is a judgement about your threat model.
+
+The first belongs in a shipped catalogue. The second does not, because the
+products Neptune was built to replace are precisely the ones that make it for
+you and hand back a clean bill of health. Acknowledging stays a deliberate act,
+one finding at a time, in a plain-text file you can read and edit.
+
+The bar for an entry is evidence, not plausibility: behaviour verified on a real
+machine, described rather than vouched for. No line in that file says any
+software is safe. CI asserts the format, that no entry is shadowed by a broader
+one listed earlier, and that a plausible-looking impostor
+(`com.evil.fakewaves`) gets no label.
+
+---
+
 ## Cross-cutting practices that came out of these
 
 - **CI as a regression net for exactly these bugs.** The pipeline runs shellcheck,

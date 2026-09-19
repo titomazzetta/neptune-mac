@@ -67,8 +67,8 @@ verify all of it yourself before running anything, is in
 | `network_check.sh` | no | nothing | ping, DNS, traceroute; `--public-ip` adds api.ipify.org |
 | `netcheck_plus.sh` | no | nothing | ping, DNS, ARP sweep; `--load` adds a public test file |
 | `check_updates.sh` | only with `--upgrade` | nothing (installs with `--upgrade`) | via `softwareupdate` / `brew` / `mas` |
-| `uninstall.sh` | after confirmation | **deletes**, confirmed | — |
-| `remove_mackeeper.sh` | after confirmation | **deletes**, confirmed | — |
+| `uninstall.sh` | after confirmation | **deletes**, confirmed; nothing with `--dry-run` | — |
+| `remove_mackeeper.sh` | after confirmation | **deletes**, confirmed; nothing with `--dry-run` | — |
 
 No script runs wholesale as root — every one refuses to start under `sudo` and
 elevates only specific commands. Nothing is installed, scheduled, or left
@@ -155,6 +155,57 @@ Every run appends its scores to `~/.neptune/history.tsv`, so the next report
 shows what each category did since last time. That is the loop the tool is built
 around: audit, understand, act, re-measure. It is ten numbers and a date per
 run, it never leaves the machine, and `rm ~/.neptune/history.tsv` ends it.
+
+### Before you delete anything
+
+Both destructive scripts take `--dry-run`. It prints the exact set of paths that
+would be removed and stops — before the confirmation prompt, before `sudo` is
+even requested:
+
+```bash
+./uninstall.sh "Some App" --dry-run
+```
+
+That set is not a description of what the script intends to do; it is the list
+the delete stage then works from. `tests/blast_radius.sh` builds a fake macOS
+layout with deliberately colliding decoy paths and asserts both that the
+target's files are in the set and that nothing else is — including a real
+comparison between a dry run and an actual sandboxed removal. It found a genuine
+over-match on its first run, where removing `Dovetail` also selected
+`DovetailPro`'s preferences.
+
+### Exit codes
+
+```
+0  healthy — nothing needs attention and every check ran
+1  one or more findings need attention
+2  no attention items, but some check could not run
+64 usage error
+```
+
+Acknowledged findings do not change the exit code. Acknowledging says "this is a
+known vendor quirk", not "this is not a problem", and a machine that exits 0
+because its owner silenced everything would make the code a worse signal than no
+code at all.
+
+### Known vendor patterns
+
+Six of the eleven attention findings on a clean, working Mac are usually Waves,
+Sonarworks, Docker and PACE/iLok shipping unsigned helpers. Neptune ships a
+catalogue that names them:
+
+```
+   3. [security] UNSIGNED privileged helper (runs as root): /Library/PrivilegedHelperTools/com.docker.socket
+      known Docker pattern — see the HTML report for what it is
+```
+
+It is a **label, not a suppression**. The finding is still found, still listed,
+still counted, and still deducts. "Docker ships an unsigned root helper" is a
+fact about Docker; "that is fine on my machine" is a judgement about your threat
+model, and making that judgement for you is exactly what the cleaner products
+this tool replaces do. See the header of
+[`scripts/vendor-quirks.tsv`](scripts/vendor-quirks.tsv) for the bar an entry
+has to clear.
 
 Legitimate vendor software routinely fails code-signing checks. Tell Neptune
 once and it stops counting against you:
@@ -290,15 +341,43 @@ running, without running it.
 
 ## Compatibility
 
-macOS, including Intel and Apple Silicon. Scripts target **bash 3.2** (the version
-Apple ships) so they run everywhere without installing anything.
+Scripts target **bash 3.2** — the version Apple ships, from 2007 — so they run on
+a stock Mac with nothing installed. CI enforces that: the build fails on
+`case`-in-subshell, associative arrays and `mapfile`, which are the idioms that
+silently break there.
+
+### What it has actually been run on
+
+Stated precisely, because "macOS" is not a version and a compatibility claim you
+cannot check is marketing.
+
+| macOS | Hardware | Status |
+|---|---|---|
+| 26 Tahoe (26.6.2, 25G83) | Apple Silicon, Mac Pro | Primary development machine. Every scan, both uninstallers, full suite. |
+| 15 Sequoia | Apple Silicon | Full suite, on someone else's machine — where DEVLOG Bug 4 surfaced. |
+| 13 Ventura | Intel | Read-only scans only. The uninstallers have not been run here. |
+
+Not tested: macOS 12 and earlier, and macOS 27. The parsing layer is covered by
+fixture tests that run on any machine, but those deliberately do not pretend to
+verify macOS-only behaviour — see the header of `tests/unit.sh`.
+
+### Known deprecation risk
+
+`redflag_scan.sh` reads the application firewall state via
+`/usr/libexec/ApplicationFirewall/socketfilterfw`. Apple has been moving away
+from that binary for several releases, and there is no documented stable
+replacement. If it disappears, the check falls back to the older `alf`
+preference domain, and if neither answers, the scan reports **"state could not
+be determined"** as an *unknown* rather than assuming the firewall is on.
+
+That is the intended behaviour and not a bug to be fixed with a guess: an
+unknown outranks a minor finding in the verdict, and it exits 2. A check that
+silently degrades to "fine" is how a security tool starts lying to you.
 
 ## Status & roadmap
 
-Neptune is actively evolving. The next major feature is structured (`--json`)
-report output and an orchestrated, interactive `observe → decide → act`
-front-end. See [`ROADMAP.md`](ROADMAP.md) for what's planned and
-[`CHANGELOG.md`](CHANGELOG.md) for what's changed.
+Neptune is actively evolving. See [`ROADMAP.md`](ROADMAP.md) for what is planned
+and [`CHANGELOG.md`](CHANGELOG.md) for what has changed.
 
 The scripts have been run on live machines throughout, and the most recent audit
 pass found and fixed real defects in them — including a signing check that never

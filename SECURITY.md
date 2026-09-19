@@ -97,6 +97,14 @@ you ask for it) structured findings:
 | `~/Desktop/neptune_findings_*.json` | structured findings | `neptune.sh --json` |
 | `~/Desktop/neptune_report_*.html` | readable report with remediation | `neptune.sh --html` |
 | `~/.neptune/history.tsv` | one line per run: date, verdict, four scores, four counts | every `neptune.sh` run |
+| `~/.neptune/seen.tsv` | one line per finding: its key, first seen, last seen, run count | every `neptune.sh` run |
+
+`seen.tsv` holds the same kind of thing at finding granularity — the
+digit-collapsed key `--acknowledge` already uses, plus two dates and a counter —
+so a report can say "flagged in each of the last six runs" instead of "flagged".
+A finding that stops appearing keeps its row with the date it was last seen,
+which is the record of something being fixed. Same terms as below: local, plain
+text, one `rm` to forget.
 
 `history.tsv` deserves its own sentence, because a file that accumulates is the
 shape telemetry usually takes. It is tab-separated plain text, it holds ten
@@ -128,10 +136,42 @@ addresses and MAC addresses, so you share the findings without the
 fingerprint. Neptune does not
 upload either file anywhere; moving it is your decision and your action.
 
+### Before you trust the uninstallers
+
+`uninstall.sh` and `remove_mackeeper.sh` are the only things here that delete,
+and both run `rm -rf` as root. Two things you can check rather than take on
+faith:
+
+```bash
+./uninstall.sh "Some App" --dry-run     # the exact delete set, then it stops
+./tests/blast_radius.sh                  # the test suite behind that claim
+```
+
+`--dry-run` prints the set and exits before the confirmation prompt and before
+`sudo` is requested. That set is not a description of intent — it is the list
+the delete stage then works from, and a test compares the two directly by doing
+a real removal inside a sandbox.
+
+`tests/blast_radius.sh` builds a fake macOS layout in a temp directory, with
+decoys that deliberately collide with the target's name, vendor and bundle-id
+prefix, and asserts that the target's files are all found and that nothing else
+is. It found a real over-match the first time it ran: `./uninstall.sh Dovetail`
+also selected `DovetailPro`'s preferences, because discovery matched the name as
+a substring rather than as a whole word. On a real Mac that is
+`./uninstall.sh Mail` taking MailMate's data with it.
+
+The harness works through `NEPTUNE_ROOT`, an environment variable that prefixes
+every system path the destructive scripts touch. It can only ever **narrow**
+what they reach — every path is built from the prefix and discovery only looks
+inside it — and while it is set, `sudo` is refused outright and the script says
+so on screen. If `HOME` is not inside that prefix, or contains `..`, the script
+refuses to run at all rather than redirect half of itself.
+
 ### Removing Neptune completely
 
 ```bash
 rm -rf ~/.sentry ~/.neptune           # the only state it keeps
+                                      # (allow, history.tsv, seen.tsv)
 rm -f ~/Desktop/neptune_full_report_*.txt \
       ~/Desktop/sentry_report_*.txt \
       ~/Desktop/redflag_report_*.txt \

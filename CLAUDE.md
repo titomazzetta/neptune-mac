@@ -88,8 +88,8 @@ CLAUDE.md        this file
 | `network_check.sh` | NAT, DNS, latency, connections | no |
 | `netcheck_plus.sh` | Deep network: Wi-Fi quality, LAN census, ASUS audit | no |
 | `check_updates.sh` | macOS + brew + App Store updates | only with `--upgrade` |
-| `uninstall.sh` | Guided app removal | YES — confirmed |
-| `remove_mackeeper.sh` | Targeted MacKeeper/Clario removal | YES — confirmed |
+| `uninstall.sh` | Guided app removal | YES — confirmed; nothing with `--dry-run` |
+| `remove_mackeeper.sh` | Targeted MacKeeper/Clario removal | YES — confirmed; nothing with `--dry-run` |
 
 ## How to work on this codebase
 
@@ -114,7 +114,18 @@ CLAUDE.md        this file
   record is invisible to the score and the JSON.
 - **Never widen a destructive glob without tracing it.** The `rm -rf` targets in
   the uninstallers are built from discovery output; a careless glob is how you
-  delete someone's home folder. Show, confirm, then delete.
+  delete someone's home folder. Show, confirm, then delete. A search term must
+  match as a WHOLE WORD — bounded by a non-alphanumeric character or the
+  start/end of the filename — because `-iname "*Mail*"` also matches MailMate.
+  Any change to discovery has to keep `tests/blast_radius.sh` green, and if you
+  add a new search location, add a decoy for it to that harness in the same
+  commit. The harness is the only thing standing between this script and
+  someone's data.
+- **The vendor catalogue labels, it never suppresses.** `vendor-quirks.tsv`
+  attaches a name and a sentence to a finding. It must not change severity,
+  scoring, or the acknowledged flag, and no entry may assert that software is
+  safe — only describe what it does. Acknowledging stays a deliberate act by the
+  person running the tool.
 - **Prefer editing one script over touching many.** These are independent by
   design; a change to `sentry.sh` should not require changes elsewhere.
 
