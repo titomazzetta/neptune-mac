@@ -14,6 +14,14 @@ fi
 echo "== bash 3.2 traps =="
 grep -nE '\$\([^)]*\bcase\b' scripts/*.sh && { echo "ERROR case-in-subshell"; fail=1; } || echo "  ok  no case-in-subshell"
 grep -nE 'declare -A|\b(mapfile|readarray)\b' scripts/*.sh && { echo "ERROR 3.2-incompatible builtin"; fail=1; } || echo "  ok  no 3.2-incompatible builtins"
+echo "== blast radius (destructive scripts) =="
+if ./tests/blast_radius.sh > /tmp/neptune_blast.log 2>&1; then
+  echo "  ok  $(tail -2 /tmp/neptune_blast.log | head -1 | sed 's/^ *//')"
+else
+  grep -A3 '^  FAIL' /tmp/neptune_blast.log
+  echo "ERROR blast-radius tests failed — run ./tests/blast_radius.sh for detail"; fail=1
+fi
+rm -f /tmp/neptune_blast.log
 echo "== unit tests =="
 if ./tests/unit.sh > /tmp/neptune_unit.log 2>&1; then
   echo "  ok  $(tail -2 /tmp/neptune_unit.log | head -1 | sed 's/^ *//')"

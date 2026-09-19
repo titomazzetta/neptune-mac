@@ -111,6 +111,16 @@ jobs:
           print('  ok  HTML is well formed, script-free and self-contained (%d bytes)' % len(h))
           CHECK
 
+      - name: Blast radius of the destructive scripts
+        run: |
+          # The only automated check on uninstall.sh and remove_mackeeper.sh used
+          # to be "the source contains a confirmation prompt" — which verifies
+          # the gate exists and says nothing about what is behind it. This builds
+          # a fake macOS layout with deliberately colliding decoy paths, and
+          # asserts both that the target's files are found and that nothing else
+          # is. It found a real over-match on its first run.
+          ./tests/blast_radius.sh
+
       - name: Verify destructive scripts still require confirmation
         run: |
           # Guardrail: the two mutating scripts must contain an interactive

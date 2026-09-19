@@ -3,8 +3,9 @@
 # uninstall.sh — Complete, careful app removal for macOS
 #
 # Usage:
-#   ./uninstall.sh "AppName"          e.g.  ./uninstall.sh "Spotify"
-#   ./uninstall.sh "AppName" --deep   also match the vendor name in file search
+#   ./uninstall.sh "AppName"             e.g.  ./uninstall.sh "Spotify"
+#   ./uninstall.sh "AppName" --deep      also match the vendor name in file search
+#   ./uninstall.sh "AppName" --dry-run   show the exact delete set and stop
 #
 # What it does, in order:
 #   1. Finds the .app bundle and reads its bundle ID + vendor
@@ -30,22 +31,85 @@ ok()   { echo "  ${GRN}[ok]${RST} $*"; }
 warn() { echo "  ${YEL}[!!]${RST} $*"; }
 die()  { echo "  ${RED}[XX]${RST} $*"; exit 1; }
 
-if [ "$(id -u)" -eq 0 ]; then
+APPNAME=""
+DEEP=false
+DRYRUN=false
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --deep)    DEEP=true ;;
+    --dry-run) DRYRUN=true ;;
+    -*)        echo "Unknown option: $1" >&2; exit 1 ;;
+    *)         [ -z "$APPNAME" ] && APPNAME="$1" || { echo "Only one app name, please." >&2; exit 1; } ;;
+  esac
+  shift
+done
+
+# ---------------------------------------------------------------------------
+# Sandbox root. Empty in every normal run, which is the only supported
+# configuration for actually removing software.
+#
+# tests/blast_radius.sh sets it to a temporary directory holding a fake
+# /Applications, /Library and home, so CI can assert the exact set of paths this
+# script would delete for a known app layout — and, more to the point, assert
+# that a decoy belonging to different software is never in that set. Without a
+# seam like this there is no way to test the only part of Neptune that runs
+# `rm -rf` as root, and "we read it carefully" is not a test.
+#
+# It can only ever NARROW what this script touches. Every path is built from the
+# prefix and discovery only looks inside it, so a sandbox run cannot reach
+# anything the prefix does not contain. When it is set the script refuses sudo
+# outright and says so on screen, so it cannot escalate either.
+# ---------------------------------------------------------------------------
+ROOT="${NEPTUNE_ROOT:-}"
+SANDBOX=false
+if [ -n "$ROOT" ]; then
+  SANDBOX=true
+  # A prefix check alone is not containment: "$ROOT/../elsewhere" starts with
+  # "$ROOT/" and still escapes it. Reject any HOME containing a parent
+  # reference, then require the prefix. (Found by tests/blast_radius.sh, which
+  # is the argument for having written it.)
+  case "$HOME" in
+    *..*) echo "HOME ('$HOME') contains '..' — refusing to resolve it." >&2
+          echo "Refusing to run: a half-redirected uninstall is worse than none." >&2
+          exit 1 ;;
+  esac
+  case "$HOME" in
+    "$ROOT"/*) ;;
+    *) echo "NEPTUNE_ROOT is set to '$ROOT' but HOME ('$HOME') is outside it." >&2
+       echo "Refusing to run: a half-redirected uninstall is worse than none." >&2
+       exit 1 ;;
+  esac
+fi
+APPS_DIR="$ROOT/Applications"
+SYS_LIB="$ROOT/Library"
+
+# In sandbox mode there is no sudo and nothing that needs it.
+run_priv() { if $SANDBOX; then "$@"; else sudo "$@"; fi; }
+
+# The root guard does not apply in sandbox mode. It exists because running the
+# whole script as root is a blast-radius problem and because user-level
+# `launchctl bootout` needs the real user session — neither is true against a
+# temporary directory with sudo disabled and launchctl never invoked. CI
+# containers commonly run as root, and a test that can only pass on one kind of
+# machine is a test people learn to ignore.
+if [ "$(id -u)" -eq 0 ] && ! $SANDBOX; then
   echo "Run as your normal user, not with sudo."; exit 1
 fi
 
-APPNAME="${1:-}"
-DEEP=false
-[ "${2:-}" = "--deep" ] && DEEP=true
-
 if [ -z "$APPNAME" ]; then
-  echo "Usage: $0 \"AppName\" [--deep]"
+  echo "Usage: $0 \"AppName\" [--deep] [--dry-run]"
   echo "Installed applications:"
-  for A in /Applications/*.app; do
+  for A in "$APPS_DIR"/*.app; do
     [ -e "$A" ] || continue
     echo "  $(basename "$A" .app)"
   done
   exit 1
+fi
+
+if $SANDBOX; then
+  echo "${BOLD}${YEL}SANDBOX MODE${RST} — operating against '$ROOT', not the real system."
+  echo "  sudo is disabled for this run. Nothing outside that directory is reachable."
+  echo
 fi
 
 ############################################################
@@ -54,7 +118,7 @@ fi
 section "1. Locating '$APPNAME'"
 
 APP_PATH=""
-for CAND in "/Applications/$APPNAME.app" "/Applications/$APPNAME" "$HOME/Applications/$APPNAME.app"; do
+for CAND in "$APPS_DIR/$APPNAME.app" "$APPS_DIR/$APPNAME" "$HOME/Applications/$APPNAME.app"; do
   [ -d "$CAND" ] && APP_PATH="$CAND" && break
 done
 # Fuzzy fallback: first /Applications bundle whose name contains APPNAME,
@@ -66,7 +130,7 @@ done
 if [ -z "$APP_PATH" ]; then
   MATCH=""
   NEEDLE=$(printf '%s' "$APPNAME" | tr '[:upper:]' '[:lower:]')
-  for A in /Applications/*.app; do
+  for A in "$APPS_DIR"/*.app; do
     [ -e "$A" ] || continue
     BUNDLE=$(basename "$A")
     HAYSTACK=$(printf '%s' "$BUNDLE" | tr '[:upper:]' '[:lower:]')
@@ -74,7 +138,7 @@ if [ -z "$APP_PATH" ]; then
       *"$NEEDLE"*) MATCH="$BUNDLE"; break ;;
     esac
   done
-  [ -n "$MATCH" ] && APP_PATH="/Applications/$MATCH"
+  [ -n "$MATCH" ] && APP_PATH="$APPS_DIR/$MATCH"
 fi
 
 BUNDLE_ID=""
@@ -109,7 +173,11 @@ section "2. Processes matching '$SHORTNAME'"
 # Now: list here, confirm in stage 5, and stop in stage 6 BY PID — exactly the
 # processes that were displayed, never a fresh pattern match after the fact.
 PROC_PIDS=""
-if [ ${#SHORTNAME} -lt 3 ]; then
+if $SANDBOX; then
+  # The process table belongs to the real machine, not to $ROOT. Scanning it in
+  # sandbox mode would list processes this run cannot and must not touch.
+  ok "Sandbox mode — process scan skipped (the process table is not sandboxed)"
+elif [ ${#SHORTNAME} -lt 3 ]; then
   warn "Search term '$SHORTNAME' is under 3 characters — process scan skipped."
   warn "A term that short matches almost anything. Quit the app yourself first."
 else
@@ -127,7 +195,7 @@ fi
 section "3. Persistence owned by this app"
 
 PLISTS=()
-for DIR in "$HOME/Library/LaunchAgents" /Library/LaunchAgents /Library/LaunchDaemons; do
+for DIR in "$HOME/Library/LaunchAgents" "$SYS_LIB/LaunchAgents" "$SYS_LIB/LaunchDaemons"; do
   [ -d "$DIR" ] || continue
   while IFS= read -r P; do
     PLISTS+=("$P")
@@ -138,7 +206,7 @@ HELPERS=()
 if [ -n "$BUNDLE_ID" ]; then
   while IFS= read -r H; do
     HELPERS+=("$H")
-  done < <(find /Library/PrivilegedHelperTools -maxdepth 1 -iname "*${VENDOR:-$SHORTNAME}*" 2>/dev/null)
+  done < <(find "$SYS_LIB/PrivilegedHelperTools" -maxdepth 1 -iname "*${VENDOR:-$SHORTNAME}*" 2>/dev/null)
 fi
 
 if [ ${#PLISTS[@]} -eq 0 ] && [ ${#HELPERS[@]} -eq 0 ]; then
@@ -166,34 +234,88 @@ SEARCH_DIRS=(
   "$HOME/Library/HTTPStorages"
   "$HOME/Library/Saved Application State"
   "$HOME/Library/Cookies"
-  "/Library/Application Support"
-  "/Library/Caches"
-  "/Library/Preferences"
+  "$SYS_LIB/Application Support"
+  "$SYS_LIB/Caches"
+  "$SYS_LIB/Preferences"
 )
 
 FOUND=()
-add_found() { local F; for F in "$@"; do [ -e "$F" ] && FOUND+=("$F"); done; }
+NEARMISS=()
+
+# ---------------------------------------------------------------------------
+# A bare `-iname "*NAME*"` is an over-match, and tests/blast_radius.sh caught it
+# doing real damage: removing "Dovetail" also selected DovetailPro's preferences
+# and an unrelated vendor's cache, because both contain the string "dovetail".
+# On a real Mac that is `./uninstall.sh Mail` taking MailMate's data with it.
+#
+# The term must therefore match as a WHOLE WORD: bounded at both ends by a
+# non-alphanumeric character or by the start/end of the filename. Every real
+# filename shape still matches —
+#     Dovetail                     exact
+#     Dovetail Helper              followed by a space
+#     com.acme.dovetail.plist      surrounded by dots
+# — while dovetailpro and acmecorp.dovetailer do not.
+#
+# Near misses are NOT silently dropped. They are collected and displayed under
+# their own heading, because "the script considered this and excluded it" is
+# information the person reviewing a delete list should have. Silently doing
+# less than expected is its own kind of surprise.
+#
+# bash 3.2: `case` with a quoted variable in the pattern matches it literally,
+# so a term containing glob metacharacters cannot widen the match.
+# ---------------------------------------------------------------------------
+lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
+
+whole_word() {  # <haystack> <needle> — both lowercased by the caller
+  local H=$1 N=$2
+  case "$H" in
+    "$N")                     return 0 ;;
+    "$N"[!a-z0-9]*)           return 0 ;;
+    *[!a-z0-9]"$N")           return 0 ;;
+    *[!a-z0-9]"$N"[!a-z0-9]*) return 0 ;;
+  esac
+  return 1
+}
+
+sift() {  # <needle> — reads candidate paths on stdin, sorts them into the lists
+  local NEEDLE BASE F
+  NEEDLE=$(lower "$1")
+  while IFS= read -r F; do
+    [ -n "$F" ] || continue
+    BASE=$(lower "$(basename "$F")")
+    if whole_word "$BASE" "$NEEDLE"; then
+      FOUND+=("$F")
+    else
+      NEARMISS+=("$F")
+    fi
+  done
+}
 
 for DIR in "${SEARCH_DIRS[@]}"; do
   [ -d "$DIR" ] || continue
   # Match by app name
-  while IFS= read -r F; do FOUND+=("$F"); done \
-    < <(find "$DIR" -maxdepth 1 -iname "*${SHORTNAME}*" 2>/dev/null)
+  sift "$SHORTNAME" < <(find "$DIR" -maxdepth 1 -iname "*${SHORTNAME}*" 2>/dev/null)
   # Match by bundle id
   if [ -n "$BUNDLE_ID" ]; then
-    while IFS= read -r F; do FOUND+=("$F"); done \
-      < <(find "$DIR" -maxdepth 1 -iname "*${BUNDLE_ID}*" 2>/dev/null)
+    sift "$BUNDLE_ID" < <(find "$DIR" -maxdepth 1 -iname "*${BUNDLE_ID}*" 2>/dev/null)
   fi
   # Vendor match only in deep mode (broader, riskier — review carefully)
   if $DEEP && [ -n "$VENDOR" ]; then
-    while IFS= read -r F; do FOUND+=("$F"); done \
-      < <(find "$DIR" -maxdepth 1 -iname "*${VENDOR}*" 2>/dev/null)
+    sift "$VENDOR" < <(find "$DIR" -maxdepth 1 -iname "*${VENDOR}*" 2>/dev/null)
   fi
 done
 
 # De-duplicate
 UNIQUE=()
 while IFS= read -r F; do UNIQUE+=("$F"); done < <(printf '%s\n' "${FOUND[@]:-}" | sort -u | grep -v '^$')
+
+# A path that matched one term as a whole word and another only as a substring
+# belongs in the delete set, not in the near-miss list.
+EXCLUDED=()
+while IFS= read -r F; do
+  [ -n "$F" ] || continue
+  printf '%s\n' ${UNIQUE[@]:+"${UNIQUE[@]}"} | grep -qxF "$F" || EXCLUDED+=("$F")
+done < <(printf '%s\n' "${NEARMISS[@]:-}" | sort -u | grep -v '^$')
 
 ############################################################
 # 5. Review and confirm
@@ -223,6 +345,13 @@ if [ ${#UNIQUE[@]} -gt 0 ]; then
   done
 fi
 
+if [ ${#EXCLUDED[@]} -gt 0 ]; then
+  echo "  ${BOLD}Excluded — '$SHORTNAME' appears only inside a longer word:${RST}"
+  for F in ${EXCLUDED[@]:+"${EXCLUDED[@]}"}; do echo "      $F"; done
+  echo "      These are NOT in the delete set. They almost always belong to"
+  echo "      different software. If one really is yours, remove it by hand."
+fi
+
 if [ "$TOTAL" -eq 0 ]; then
   echo "  Nothing found for '$APPNAME'. Check the spelling, or try --deep."
   exit 0
@@ -232,11 +361,34 @@ echo
 echo "  ${BOLD}$TOTAL item(s) total.${RST} Review the list above carefully —"
 echo "  especially any entries that look like they belong to OTHER software."
 $DEEP && warn "Deep mode matched on vendor '$VENDOR' — extra scrutiny warranted."
+
+# --dry-run stops here, before the confirmation prompt and before sudo is even
+# requested. Everything above this line is discovery; everything below it
+# mutates. There is deliberately no flag that skips the prompt — dry-run exists
+# so you can see the blast radius without agreeing to it, which is the opposite
+# of a --yes flag and the reason it is safe to add.
+#
+# The machine-readable block is what tests/blast_radius.sh asserts against.
+if $DRYRUN; then
+  echo
+  echo "  ${BOLD}DRY RUN — nothing was changed and nothing will be.${RST}"
+  echo "  Re-run without --dry-run to be asked for confirmation."
+  echo
+  echo "DELETE-SET BEGIN"
+  [ -n "$APP_PATH" ] && printf 'app\t%s\n' "$APP_PATH"
+  for P in $PROC_PIDS; do printf 'process\t%s\n' "$P"; done
+  for P in ${PLISTS[@]:+"${PLISTS[@]}"}; do printf 'launch\t%s\n' "$P"; done
+  for H in ${HELPERS[@]:+"${HELPERS[@]}"}; do printf 'helper\t%s\n' "$H"; done
+  for F in ${UNIQUE[@]:+"${UNIQUE[@]}"}; do printf 'file\t%s\n' "$F"; done
+  echo "DELETE-SET END"
+  exit 0
+fi
+
 echo
 read -r -p "  Stop those processes and delete ALL of the above? [y/N] " REPLY
 case "$REPLY" in [yY]|[yY][eE][sS]) ;; *) echo "  Aborted. Nothing was changed."; exit 0 ;; esac
 
-sudo -v || die "Could not obtain sudo"
+$SANDBOX || sudo -v || die "Could not obtain sudo"
 
 ############################################################
 # 6. Delete
@@ -249,7 +401,7 @@ FAILED=()
 # Killing by stored PID rather than re-running a pattern match means what gets
 # terminated is exactly what the user approved, even if something else started
 # in the meantime that happens to match the name.
-if [ -n "$PROC_PIDS" ]; then
+if [ -n "$PROC_PIDS" ] && ! $SANDBOX; then
   [ -n "$APP_PATH" ] && { osascript -e "quit app \"$SHORTNAME\"" 2>/dev/null; sleep 1; }
   for P in $PROC_PIDS; do
     kill "$P" 2>/dev/null && ok "Asked pid $P to quit"
@@ -263,20 +415,22 @@ if [ -n "$PROC_PIDS" ]; then
 fi
 
 # Unload persistence first
-for P in ${PLISTS[@]:+"${PLISTS[@]}"}; do
-  LABEL=$(basename "$P" .plist)
-  case "$P" in
-    "$HOME"/*) launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null ;;
-    *)         sudo launchctl bootout "system/$LABEL" 2>/dev/null
-               sudo launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null ;;
-  esac
-done
+if ! $SANDBOX; then
+  for P in ${PLISTS[@]:+"${PLISTS[@]}"}; do
+    LABEL=$(basename "$P" .plist)
+    case "$P" in
+      "$HOME"/*) launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null ;;
+      *)         sudo launchctl bootout "system/$LABEL" 2>/dev/null
+                 sudo launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null ;;
+    esac
+  done
+fi
 
 zap() {
   local F=$1
   case "$F" in
     "$HOME"/*) rm -rf "$F" 2>/dev/null ;;
-    *)         sudo rm -rf "$F" 2>/dev/null ;;
+    *)         run_priv rm -rf "$F" 2>/dev/null ;;
   esac
   if [ -e "$F" ]; then
     FAILED+=("$F"); echo "  ${RED}[XX]${RST} $F"
@@ -295,7 +449,7 @@ for F in ${UNIQUE[@]:+"${UNIQUE[@]}"}; do zap "$F"; done
 ############################################################
 section "7. Verification"
 
-LEFT=$(find /Applications "$HOME/Library" /Library -maxdepth 3 -iname "*${SHORTNAME}*" 2>/dev/null | head -10)
+LEFT=$(find "$APPS_DIR" "$HOME/Library" "$SYS_LIB" -maxdepth 3 -iname "*${SHORTNAME}*" 2>/dev/null | head -10)
 if [ -z "$LEFT" ] && [ ${#FAILED[@]} -eq 0 ]; then
   echo "  ${GRN}${BOLD}CLEAN.${RST} '$SHORTNAME' fully removed."
 else
