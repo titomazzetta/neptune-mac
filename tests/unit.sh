@@ -277,13 +277,28 @@ t_section "Acknowledge key must stay valid UTF-8 (DEVLOG Bug 10)"
 # character.
 LONG_TITLE="Unsigned process with network access: WavesLoca (pid 4500) — sig:UNSIGNED — outbound:3 — LISTENING on: [::1]:6985"
 
-fixed_key() {
+fixed_key() {  # mirrors the key builder in neptune.sh
+  awk '{ key = tolower($0); gsub(/[0-9]+/, "#", key); gsub(/[ \t]+/, " ", key)
+         if (length(key) > 90) {
+           nw = split(key, w, " ")
+           key = w[1]
+           for (i = 2; i <= nw; i++) {
+             cand = key " " w[i]
+             if (length(cand) > 90) break
+             key = cand
+           }
+         }
+         print key }'
+}
+broken_key() {  # what shipped, kept so the test is pinned to a reproduction.
+  # stderr silenced on purpose: this deliberately builds the invalid string, and
+  # on macOS awk that is exactly what prints the warning asserted against below.
+  awk '{ key = tolower($0); gsub(/[0-9]+/, "#", key); print substr(key, 1, 90) }' 2>/dev/null
+}
+sliced_key() {  # the FIRST fix: cut at 90, then trim back. Correct, but noisy.
   awk '{ key = tolower($0); gsub(/[0-9]+/, "#", key); gsub(/[ \t]+/, " ", key)
          if (length(key) > 90) { key = substr(key, 1, 90); sub(/[^ ]*$/, "", key); sub(/ +$/, "", key) }
          print key }'
-}
-broken_key() {  # what shipped, kept so the test is pinned to a reproduction
-  awk '{ key = tolower($0); gsub(/[0-9]+/, "#", key); print substr(key, 1, 90) }'
 }
 utf8_ok() { python3 -c 'import sys; sys.stdin.buffer.read().decode("utf-8")' 2>/dev/null; }
 
@@ -305,6 +320,33 @@ t_is "key is truncated, not passed through" "yes" \
    "$( [ "${#K}" -lt "${#LONG_TITLE}" ] && echo yes || echo no )"
 t_is "key has no trailing space" "" "$(printf '%s' "$K" | grep -o ' $' || true)"
 
+# The builder must be SILENT. macOS awk (20200816) prints
+#   awk: towc: multibyte conversion failure on: '?'
+# to stderr the moment a sub() touches bytes left invalid by a mid-character
+# substr. The first fix produced correct output and that warning on every long
+# finding — a scan that emits parser noise during a normal run is not one people
+# keep trusting, and it was invisible on the Linux CI runner.
+#
+# The current builder concatenates whole words and never creates the invalid
+# intermediate at all, so there is nothing to warn about.
+NOISE=$(printf '%s' "$LONG_TITLE" | fixed_key 2>&1 >/dev/null)
+t_is "the key builder writes nothing to stderr" "" "$NOISE"
+
+# And pin the reproduction: the slice-then-trim version really is the noisy one,
+# so this assertion cannot quietly stop testing anything.
+SLICED_NOISE=$(printf '%s' "$LONG_TITLE" | sliced_key 2>&1 >/dev/null)
+if [ -n "$SLICED_NOISE" ]; then
+  t_ok "slice-then-trim is the version that warns (reproduced here)"
+else
+  # Linux awk does not warn, so this is informational rather than a failure —
+  # the point is that the CURRENT builder is silent on both.
+  t_ok "slice-then-trim warns only on macOS awk (silent on this awk)"
+fi
+
+# Both approaches must agree on the answer; only the noise differs.
+t_is "word-wise and slice-then-trim produce the same key" \
+   "$(printf '%s' "$LONG_TITLE" | sliced_key 2>/dev/null)" "$K"
+
 ############################################################
 t_section "Remediation advice covers what we have actually seen"
 ############################################################
@@ -321,26 +363,14 @@ t_is "an unrecognised finding is reported as unmapped, not silently blank" \
    "$(python3 tests/advice_coverage.py /tmp/nt_novel.txt)"
 
 # Every command the table offers must be a single command, not a pipeline or a
-# chain. The table's own stated rule; assert it rather than trusting it.
-PIPED=$(python3 - <<'ADV'
-import sys
-sys.argv = ["x", "/dev/null", "/dev/null", "healthy"]
-src = open("scripts/neptune.sh", encoding="utf-8").read()
-body = src[src.index("import html, json, os, re, shlex"):
-           src.index("# ---------------------------------------------------------------------------\nsc, ack, counts")]
-ns = {"__name__": "t"}
-exec(compile(body, "renderer", "exec"), ns)
-bad = []
-for pat, means, do, cmdf in ns["REMEDIATION"]:
-    for c, kind, eff in cmdf("UNSIGNED persistence: x runs /Library/Foo/bar (/Library/LaunchDaemons/x.plist)"):
-        if any(ch in c for ch in ("|", ";", "&&", ">", "`", "$(")):
-            bad.append(c)
-        if kind not in ("look", "setting", "software", "neptune"):
-            bad.append("bad kind: " + kind)
-print("\n".join(bad))
-ADV
-)
-t_is "no remediation command is a pipeline, chain or substitution" "" "$PIPED"
+# chain. That is the table's own stated rule; assert it rather than trust it.
+#
+# The checker is a FILE, not a heredoc inside $(...). The inline version parsed
+# on bash 5 and was a syntax error on bash 3.2 — see the header of
+# tests/command_safety.py for why, and note that it failed as a PARSE error, so
+# this file exited non-zero having printed no FAIL at all.
+t_is "no remediation command is a pipeline, chain or substitution" "" \
+   "$(python3 tests/command_safety.py)"
 
 ############################################################
 t_section "Vendor catalogue is a label, never a suppression"

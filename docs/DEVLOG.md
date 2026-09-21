@@ -770,6 +770,106 @@ one listed earlier, and that a plausible-looking impostor
 
 ---
 
+## Bug 12 — two defects in the fix for Bug 10, both invisible on Linux
+
+Bug 10's fix was written and tested in a Linux container, where it passed. Run
+on macOS, the test file that proves it does not parse, and the fix itself prints
+warnings.
+
+### 12a — the test file was a syntax error on bash 3.2
+
+```
+./tests/unit.sh: line 336: unexpected EOF while looking for matching `'
+./tests/unit.sh: line 508: syntax error: unexpected end of file
+```
+
+**Cause.** A python heredoc inside command substitution:
+
+```bash
+PIPED=$(python3 - <<'ADV'
+    if any(ch in c for ch in ("|", ";", "&&", ">", "`", "$(")):
+ADV
+)
+```
+
+bash 3.2 scans a heredoc body for backticks and `$(` **even when the heredoc is
+already inside `$( )`**. The body here is python that merely *mentions* those
+characters — it is a list of shell metacharacters the test forbids in
+remediation commands — and that is enough. bash 5 parses it without complaint.
+
+This is the same family as the `case`-inside-`$()` trap already in CLAUDE.md:
+bash 3.2's command-substitution parser is not cleanly recursive. The fix is
+never a quoting trick; it is to get the construct out of `$( )`. The python now
+lives in `tests/command_safety.py`, matching `tests/advice_coverage.py`.
+
+**The worse part is how it failed.** A parse error takes the whole file down
+before any assertion runs, so `./tests/unit.sh | grep FAIL` printed *nothing*
+while the exit code was non-zero. A test file that exits non-zero with no
+failures reported is the harness bug from the Bug 8 pass wearing its third
+costume — after the 27 uncounted assertions and the CI gate that never fired.
+
+Two gates now exist, because neither alone is sufficient:
+
+* `bash -n` over `tests/*.sh`, not just `scripts/*.sh`. The old loop never
+  looked at the test files at all.
+* A grep for `$(` followed by `<<`, because `bash -n` **on the CI runner cannot
+  catch this** — bash 5 is happy with it. A syntax gate that runs on the wrong
+  bash is a syntax gate that passes.
+
+### 12b — the fix emitted parser warnings on every long finding
+
+```
+awk: towc: multibyte conversion failure on: '?'
+ input record number 1, file
+ source line number 2
+```
+
+**Cause.** The Bug 10 fix was "cut at byte 90, then trim back to the last
+space". The output is correct — the trim removes the broken bytes — but for one
+statement the string *is* invalid UTF-8, and macOS awk (20200816) warns the
+moment the next `sub()` touches it. Linux awk says nothing, so CI was silent.
+
+Correct output with a warning on stderr for every long finding. Not a crash,
+not wrong, just noise during a normal scan — and a scan that emits parser
+warnings is one people stop reading closely, which is this project's entire
+argument about alert fatigue applied to itself.
+
+**Fix.** Do not create the invalid intermediate at all. Build the key by
+concatenating whole words while the total stays under the limit:
+
+```awk
+nw = split(key, w, " ")
+key = w[1]
+for (i = 2; i <= nw; i++) {
+  cand = key " " w[i]
+  if (length(cand) > 90) break
+  key = cand
+}
+```
+
+Same answer, no slicing, nothing to warn about. A single word longer than the
+limit is kept whole: a slightly long key costs nothing, and cutting it is the
+bug.
+
+The test now asserts the builder writes **nothing to stderr**, and separately
+that the old slice-then-trim version is the one that warns — so the assertion
+is pinned to a reproduction rather than to a hope, and it cannot quietly stop
+testing anything.
+
+### The lesson, which is the same one three times now
+
+The `\s` retraction says: verifying a simulation of your premise is not
+verifying your premise. Bug 10's own entry says: a flag nobody has run is not a
+feature, it is a claim. This adds the third face of it — **a fix validated only
+on the development platform is a claim about the development platform.**
+
+Every one of these was found in seconds by running the thing on the machine it
+is for. Nothing clever was required. The cost each time was the gap between
+"tests pass" and "tests pass where it ships", and the only durable fix is to
+close that gap earlier, which is what the two new gates are for.
+
+---
+
 ## Cross-cutting practices that came out of these
 
 - **CI as a regression net for exactly these bugs.** The pipeline runs shellcheck,

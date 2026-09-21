@@ -19,7 +19,9 @@ jobs:
       - name: Syntax check (bash -n) all scripts
         run: |
           fail=0
-          for f in scripts/*.sh; do
+          # tests/*.sh too: unit.sh once failed to parse on bash 3.2 and this
+          # loop, which only looked at scripts/, had nothing to say about it.
+          for f in scripts/*.sh tests/*.sh; do
             if bash -n "$f"; then
               echo "  ok  $f"
             else
@@ -50,14 +52,21 @@ jobs:
             # warning only; some are provably non-empty. Reviewer confirms.
           fi
 
-          # associative arrays — unsupported in 3.2
-          if grep -nE 'declare -A' scripts/*.sh; then
-            echo "ERROR: associative arrays (declare -A) unsupported in bash 3.2"; fail=1
+          # mapfile / readarray — unsupported in 3.2
+          # Fragments, so the gate does not flag tests/lint.sh, which carries
+          # the same check and would otherwise match on its own source line.
+          BUILTINS='de''clare -A|\b(map''file|read''array)\b'
+          if grep -nE "$BUILTINS" scripts/*.sh tests/*.sh; then
+            echo "ERROR: associative arrays / mapfile / readarray are unsupported in bash 3.2"; fail=1
           fi
 
-          # mapfile / readarray — unsupported in 3.2
-          if grep -nE '\b(mapfile|readarray)\b' scripts/*.sh; then
-            echo "ERROR: mapfile/readarray unsupported in bash 3.2"; fail=1
+          # heredoc inside $( ) — same family as case-in-subshell. bash 3.2
+          # scans a heredoc body for backticks and $( even when it is already
+          # inside $( ), so a script that merely MENTIONS those characters is a
+          # syntax error there. This runner's bash 5 parses it fine, which is
+          # exactly why it needs a grep and not just `bash -n`.
+          if grep -nE '\$\(.*<<' scripts/*.sh tests/*.sh; then
+            echo "ERROR: heredoc inside \$() breaks bash 3.2 — move it to its own file"; fail=1
           fi
 
           exit $fail

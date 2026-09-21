@@ -39,6 +39,17 @@ These are hard rules. Breaking any of them is a regression, even if the code
 1. **macOS ships bash 3.2 (2007).** This is the single most important constraint.
    Modern bash idioms silently break on it. Specifically:
    - `case` statements inside `$(...)` command substitution FAIL to parse. Use awk.
+   - A **heredoc inside `$(...)`** fails too, and for the same reason: the 3.2
+     parser scans the heredoc body for backticks and `$(` even though it is
+     already inside a substitution, so a script that merely *mentions* those
+     characters is a syntax error. Put the heredoc's contents in their own file.
+     `bash -n` on the CI runner cannot catch this — bash 5 parses it happily —
+     so there is a grep gate for it.
+   - **Never let `substr()` cut a multibyte character.** These titles are full
+     of em-dashes; a byte-slice that lands inside one leaves invalid UTF-8,
+     which crashes the python renderer (Bug 10), and macOS awk then prints
+     `towc: multibyte conversion failure` to stderr the moment anything touches
+     those bytes (Bug 12). Build strings from whole words instead of slicing.
    - Under `set -u`, expanding an empty array `"${ARR[@]}"` is an "unbound variable"
      error. ALWAYS guard: `${ARR[@]:+"${ARR[@]}"}`.
    - No associative arrays, no `${var^^}`, no `mapfile`/`readarray`.

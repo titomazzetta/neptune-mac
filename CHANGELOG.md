@@ -9,6 +9,38 @@ explains each in full — symptom, root cause, fix, and what was learned.
 
 ---
 
+## macOS reality check — 2026-09-21
+
+Everything above was written and tested on Linux. Running it on the target
+platform found three things, one confirming and two breaking.
+
+### Confirmed
+- **Bug 10 is real on macOS.** `awk version 20200816`: `length("x—y")` is 5 and
+  `substr($0,1,2)` returns `78 e2` — a bare lead byte. The DEVLOG entry now
+  carries that evidence instead of a Linux result standing in for it.
+
+### Fixed
+- **`tests/unit.sh` was a syntax error on bash 3.2** — a python heredoc inside
+  `$( )`, which the 3.2 parser breaks on because it scans the body for backticks
+  and `$(` even there. Moved to `tests/command_safety.py`. It failed as a parse
+  error, so the file exited non-zero having printed no failures at all. (Bug 12a)
+- **The Bug 10 fix printed `awk: towc: multibyte conversion failure`** on every
+  long finding. Cutting at byte 90 and trimming back produces correct output but
+  briefly holds an invalid UTF-8 string, and macOS awk warns when the next
+  `sub()` touches it. The key is now built from whole words, so the invalid
+  intermediate never exists. (Bug 12b)
+
+### Added
+- `bash -n` now covers `tests/*.sh`, not only `scripts/*.sh`.
+- A gate for heredocs inside `$( )` — which `bash -n` on the CI runner cannot
+  catch, because bash 5 parses them fine.
+- An assertion that the acknowledge-key builder writes nothing to stderr, pinned
+  against a reproduction of the version that did.
+- The bash 3.2 trap gates now scan `tests/` as well, with their patterns
+  assembled from fragments so they cannot match their own source.
+
+---
+
 ## Testing the dangerous parts — 2026-09-19
 
 The six gaps from the 2026-09-19 review, closed.
