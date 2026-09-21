@@ -568,6 +568,37 @@ And read every record with `errors="replace"`, so a bad byte from an older
 report. The first fix stops producing the problem; the second stops the reader
 being the thing that dies over it. Neither is a substitute for the other.
 
+**Verified on the target platform, not on a model of it.**
+
+The bug was found in a Linux container, and the DEVLOG already contains one
+entry about exactly that being insufficient — the `\s` episode, where a premise
+was "confirmed" by simulating it on the wrong platform and five commits were
+built on the result. awk is not one program. macOS ships BWK awk; the container
+ships something else; and whether `substr` counts bytes or characters is
+precisely the kind of thing that differs. If macOS awk counted characters, this
+truncation would never have split anything and the entry below would be
+describing a bug that does not exist on the machine Neptune runs on.
+
+So it was checked there, on macOS 26, before this was written:
+
+```
+$ printf 'x—y\n' | awk '{ print length($0) }'
+5
+$ printf 'x—y\n' | awk '{ print substr($0,1,2) }' | xxd | head -1
+00000000: 78e2 0a                                  x..
+$ awk --version
+awk version 20200816
+```
+
+`length` returns 5 for a three-character string, and `substr($0,1,2)` returns
+`78 e2` — the letter `x` followed by a lone `\xe2`, the first byte of an
+em-dash with its two continuation bytes cut off. That is the corruption, on the
+target platform, in two commands.
+
+The habit is cheap and the alternative has already cost this project five
+retracted commits: when a diagnosis depends on how a tool behaves, run the tool
+on the machine the claim is about.
+
 **Lessons.**
 
 1. **A flag nobody has run is not a feature, it is a claim.** `--json` had been
