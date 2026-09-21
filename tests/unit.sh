@@ -343,9 +343,32 @@ else
   t_ok "slice-then-trim warns only on macOS awk (silent on this awk)"
 fi
 
-# Both approaches must agree on the answer; only the noise differs.
-t_is "word-wise and slice-then-trim produce the same key" \
-   "$(printf '%s' "$LONG_TITLE" | sliced_key 2>/dev/null)" "$K"
+# Pin the key to a literal rather than comparing the two implementations.
+#
+# The comparison was the wrong assertion and macOS proved it: there,
+# slice-then-trim does not merely warn — it produces NO OUTPUT AT ALL for this
+# input. An empty key would silently break acknowledge matching, so the first
+# fix for Bug 10 was broken on the target platform, not just noisy on it.
+#
+# A literal is platform-independent, and it pins the key format besides, which
+# matters because ~/.neptune/allow entries are keyed on exactly this string.
+EXPECTED_KEY='unsigned process with network access: wavesloca (pid #) — sig:unsigned — outbound:#'
+t_is "the key is exactly what we expect" "$EXPECTED_KEY" "$K"
+t_is "and it fits the length budget" "yes" \
+   "$( [ "$(printf '%s' "$K" | wc -c | tr -d ' ')" -le 90 ] && echo yes || echo no )"
+
+# What slice-then-trim does here is REPORTED, not asserted: it differs by awk,
+# and that difference is the finding. Asserting either behaviour would make this
+# file pass on one platform and fail on the other for no useful reason.
+SLICED=$(printf '%s' "$LONG_TITLE" | sliced_key 2>/dev/null)
+if [ "$SLICED" = "$K" ]; then
+  t_ok "slice-then-trim agrees on this awk — here only the stderr noise differs"
+elif [ -z "$SLICED" ]; then
+  t_ok "slice-then-trim yields an EMPTY key on this awk — it does not just warn"
+else
+  t_fail "slice-then-trim behaviour is one of the two known ones" \
+         "the same key, or nothing at all" "$SLICED"
+fi
 
 ############################################################
 t_section "Remediation advice covers what we have actually seen"
