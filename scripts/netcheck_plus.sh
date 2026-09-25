@@ -1,24 +1,27 @@
 #!/bin/bash
 #
-# netcheck_plus.sh — Deep network dial-in check for macOS + ASUS mesh
+# netcheck_plus.sh — Deep network dial-in check for macOS and your home router
 #
-# Read-only. Four parts:
-#   1. LOCAL HEALTH   — interface, latency (idle + under load), DNS, MTU, packet loss
+# Read-only. Five parts:
+#   1. LOCAL HEALTH   — interface, latency, DNS, MTU, packet loss
 #   2. WI-FI QUALITY  — signal, noise, tx rate, channel — the "why is it slow" layer
-#   3. LAN CENSUS     — every device on your network, so you can spot the unknown one
-#   4. ASUS AUDIT     — what to verify in the router GUI, with the CLI equivalent
-#                       where the router's SSH is enabled
+#   3. BUFFERBLOAT    — latency under load (only with --load)
+#   4. LAN CENSUS     — every device on your network, so you can spot the unknown one
+#   5. ROUTER AUDIT   — what to verify in your router's admin page
 #
 # Usage:   ./netcheck_plus.sh
-#          ./netcheck_plus.sh --load   also runs an under-load latency test
+#          ./netcheck_plus.sh --load   also measures latency under load
 #
-# --load is the ONLY part of this script that touches the network beyond your
-# own LAN and DNS. It saturates the link for ~8 seconds by pulling from a 100MB
-# public test file and aborting; how much actually transfers depends on your
-# line speed, so on a fast connection expect tens of megabytes. Don't run it on
-# a metered or capped connection.
+# Standalone on purpose: it is not part of neptune.sh, because the census pings
+# every address on your subnet and that should be something you choose to do.
+#
+# --load is the ONLY part that reaches beyond your LAN, DNS and one ping target.
+# It saturates the link for up to 8 seconds by downloading from Cloudflare's
+# public speed-test endpoint (no account, nothing identifying sent) and then
+# stops — on a fast line expect up to 100 MB. Skip it on a metered connection.
 
 set -u
+export LC_ALL=C   # byte-safe text tools on macOS — see the note in neptune.sh
 
 BOLD=$(tput bold 2>/dev/null || true)
 RED=$(tput setaf 1 2>/dev/null || true)
@@ -33,12 +36,31 @@ warn() { echo "  ${YEL}[!!]${RST} $*"; }
 bad()  { echo "  ${RED}[XX]${RST} $*"; }
 note() { echo "  $*"; }
 
-LOAD=false
-[ "${1:-}" = "--load" ] && LOAD=true
+# gt <a> <b> — numeric a > b for decimal strings; false if either is empty.
+# Values go in with -v, never pasted into the awk program text.
+gt() { [ -n "$1" ] && [ -n "$2" ] && awk -v a="$1" -v b="$2" 'BEGIN { exit !(a + 0 > b + 0) }'; }
 
-# Same guard the other scripts carry (CLAUDE.md constraint 5): read-only scans
-# have no reason to run as root, and running one under sudo would write any
-# stray artefact as root.
+# mac_kind <mac> — "private" when the locally-administered bit is set (second
+# hex digit 2, 6, A or E). Phones, tablets and Macs use a randomized address per
+# network by default, so an unrecognizable MAC with this bit is usually a device
+# you own with Private Wi-Fi Address on — not an intruder.
+mac_kind() {
+  printf '%s' "$1" | awk -F: '{ o = $1; if (length(o) == 1) o = "0" o
+                               d = toupper(substr(o, 2, 1))
+                               if (d == "2" || d == "6" || d == "A" || d == "E") print "private" }'
+}
+
+[ "${NEPTUNE_LIB:-}" = "1" ] && return 0
+
+LOAD=false
+case "${1:-}" in
+  "") ;;
+  --load) LOAD=true ;;
+  -h|--help) sed -n '3,21p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  *) echo "Unknown option: $1  (try --help)"; exit 64 ;;
+esac
+
+# Same guard the other scripts carry (CLAUDE.md constraint 5).
 if [ "$(id -u)" -eq 0 ]; then
   echo "Run as your normal user, not with sudo."; exit 1
 fi
@@ -54,27 +76,36 @@ IFACE=$(route -n get default 2>/dev/null | awk '/interface/{print $2}')
 GATEWAY=$(route -n get default 2>/dev/null | awk '/gateway/{print $2}')
 LOCALIP=$(ipconfig getifaddr "${IFACE:-en0}" 2>/dev/null)
 IS_WIFI=false
-if networksetup -listallhardwareports 2>/dev/null | grep -A2 "Wi-Fi" | grep -q "$IFACE"; then IS_WIFI=true; fi
+if [ -n "$IFACE" ] && networksetup -listallhardwareports 2>/dev/null | grep -A2 "Wi-Fi" | grep -qw "$IFACE"; then IS_WIFI=true; fi
 
-note "Interface: ${IFACE:-?} ($($IS_WIFI && echo Wi-Fi || echo Ethernet))"
+if $IS_WIFI; then KIND=Wi-Fi; else KIND=wired; fi
+note "Interface: ${IFACE:-?} ($KIND)"
 note "Local IP:  ${LOCALIP:-?}    Gateway: ${GATEWAY:-?}"
 
-# MTU
-MTU=$(ifconfig "${IFACE:-en0}" 2>/dev/null | awk '/mtu/{print $NF}')
-note "MTU: ${MTU:-?} (1500 = standard; lower can mean fragmentation issues)"
+MTU=$(ifconfig "${IFACE:-en0}" 2>/dev/null | awk '/mtu/{print $NF; exit}')
+note "MTU: ${MTU:-?} (1500 = standard; lower can mean a VPN or fragmentation)"
 
-# Idle latency + packet loss to gateway (20 pings)
 if [ -n "${GATEWAY:-}" ]; then
   PING=$(ping -c 20 -q "$GATEWAY" 2>/dev/null)
-  LOSS=$(echo "$PING" | awk -F',' '/packet loss/{print $3}' | grep -oE '[0-9.]+%')
-  AVG=$(echo "$PING" | awk -F'/' '/avg/{print $5}')
-  JITTER=$(echo "$PING" | awk -F'/' '/avg/{print $7}' | tr -d ' ms')
+  # By pattern, not by comma field: with duplicate replies macOS inserts
+  # "+K duplicates," and the third field is no longer the loss.
+  LOSS=$(printf '%s\n' "$PING" | grep -oE '[0-9.]+% packet loss' | cut -d' ' -f1)
+  AVG=$(printf '%s\n' "$PING" | awk -F'/' '/avg/{print $5}')
+  JITTER=$(printf '%s\n' "$PING" | awk -F'/' '/avg/{print $7}' | tr -d ' ms')
   note "Gateway: ${AVG:-?} ms avg   jitter: ${JITTER:-?} ms   loss: ${LOSS:-?}"
-  awk "BEGIN{exit !(${AVG:-0} > 10)}" && warn "LAN latency >10ms — high for local; Wi-Fi interference or weak mesh link" || ok "LAN latency healthy"
-  case "${LOSS:-0%}" in 0%|0.0%) ok "No packet loss to gateway" ;; *) bad "Packet loss to your own router (${LOSS}) — RF interference or failing link" ;; esac
+  if [ -z "${AVG:-}" ]; then
+    warn "The router did not answer pings (some block them) — latency and loss unknown"
+  else
+    if gt "$AVG" 10; then warn "LAN latency >10ms — high for one local hop; Wi-Fi interference or a weak mesh link"
+    else ok "LAN latency healthy"; fi
+    case "${LOSS:-}" in
+      "") warn "Could not read packet loss from ping's summary" ;;
+      0%|0.0%) ok "No packet loss to the router" ;;
+      *) bad "Packet loss to your own router (${LOSS}) — RF interference or a failing link" ;;
+    esac
+  fi
 fi
 
-# Internet latency + DNS
 INET=$(ping -c 10 -q 1.1.1.1 2>/dev/null | awk -F'/' '/avg/{print $5}')
 note "Internet (1.1.1.1): ${INET:-?} ms avg"
 for D in apple.com google.com cloudflare.com; do
@@ -88,28 +119,30 @@ done
 if $IS_WIFI; then
   section "2. Wi-Fi signal quality"
   WDATA=$(system_profiler SPAirPortDataType 2>/dev/null)
-  RSSI=$(echo "$WDATA" | awk -F': ' '/Signal \/ Noise/{print; exit}')
-  RATE=$(echo "$WDATA" | awk -F': ' '/Transmit Rate/{print $2; exit}')
-  CHAN=$(echo "$WDATA" | awk -F': ' '/^ *Channel/{print $2; exit}')
-  PHY=$(echo "$WDATA"  | awk -F': ' '/PHY Mode/{print $2; exit}')
-  note "PHY mode:      ${PHY:-?}   (want 802.11ax/Wi-Fi 6 or better)"
+  SN=$(printf '%s\n' "$WDATA" | awk -F': ' '/Signal \/ Noise/{print $2; exit}')
+  RATE=$(printf '%s\n' "$WDATA" | awk -F': ' '/Transmit Rate/{print $2; exit}')
+  CHAN=$(printf '%s\n' "$WDATA" | awk -F': ' '/^ *Channel/{print $2; exit}')
+  PHY=$(printf '%s\n' "$WDATA"  | awk -F': ' '/PHY Mode/{print $2; exit}')
+  note "PHY mode:      ${PHY:-?}   (802.11ax / Wi-Fi 6 or newer is current)"
   note "Channel:       ${CHAN:-?}"
-  note "Signal/Noise:  ${RSSI#*: }"
+  note "Signal/Noise:  ${SN:-?}"
   note "Transmit rate: ${RATE:-?} Mbps"
 
-  RSSI_NUM=$(echo "$WDATA" | awk -F': ' '/Signal \/ Noise/{print $2}' | grep -oE '\-[0-9]+' | head -1)
-  if [ -n "${RSSI_NUM:-}" ]; then
-    if [ "$RSSI_NUM" -ge -60 ]; then ok "Signal strong (${RSSI_NUM} dBm)"
-    elif [ "$RSSI_NUM" -ge -70 ]; then warn "Signal moderate (${RSSI_NUM} dBm) — a mesh node closer would help"
-    else bad "Signal weak (${RSSI_NUM} dBm) — this alone explains slow/latent Wi-Fi"; fi
+  RSSI=$(printf '%s' "$SN" | grep -oE -- '-[0-9]+' | head -1)
+  if [ -n "${RSSI:-}" ]; then
+    if [ "$RSSI" -ge -60 ]; then ok "Signal strong (${RSSI} dBm)"
+    elif [ "$RSSI" -ge -70 ]; then warn "Signal moderate (${RSSI} dBm) — a closer router or mesh node would help"
+    else bad "Signal weak (${RSSI} dBm) — this alone explains slow or laggy Wi-Fi"; fi
   fi
-  note ""
-  note "${BOLD}The single biggest win for a Mac Studio: wire it.${RST} A desktop that never"
-  note "moves has no reason to be on Wi-Fi — Ethernet to the nearest node drops"
-  note "LAN latency to ~1ms and frees airtime for devices that actually roam."
+  if ! system_profiler SPHardwareDataType 2>/dev/null | grep -q 'Model Name: .*Book'; then
+    note ""
+    note "${BOLD}The single biggest win for a desktop Mac: wire it.${RST} A machine that never"
+    note "moves has no reason to be on Wi-Fi — Ethernet to the nearest router or node"
+    note "drops LAN latency to ~1ms and frees airtime for devices that actually roam."
+  fi
 else
   section "2. Connection type"
-  ok "On Ethernet — ideal for a desktop. No Wi-Fi quality concerns."
+  ok "On a wired connection — no Wi-Fi quality concerns."
 fi
 
 ############################################################
@@ -117,22 +150,35 @@ fi
 ############################################################
 if $LOAD; then
   section "3. Bufferbloat (latency under load)"
-  note "Measuring idle vs loaded latency (saturating the link for ~8s; the"
-  note "transfer is aborted after, so volume scales with your line speed)..."
-  IDLE=$(ping -c 5 -q "${GATEWAY:-1.1.1.1}" 2>/dev/null | awk -F'/' '/avg/{print $5}')
-  # Start a background download to saturate the link
-  curl -s -o /dev/null "https://speed.hetzner.de/100MB.bin" &
+  # Bufferbloat lives at the slowest hop — usually the modem / ISP link — so the
+  # target is a host beyond it. Pinging the router would only measure the LAN.
+  TARGET=1.1.1.1
+  note "Idle vs loaded latency to $TARGET (saturating the link for up to 8s)..."
+  IDLE=$(ping -c 5 -q "$TARGET" 2>/dev/null | awk -F'/' '/avg/{print $5}')
+  GOT=$(mktemp "${TMPDIR:-/tmp}/neptune-load.XXXXXX")
+  curl -s --max-time 8 -o /dev/null -w '%{size_download}' \
+    "https://speed.cloudflare.com/__down?bytes=100000000" > "$GOT" 2>/dev/null &
   DLPID=$!
   sleep 1
-  LOADED=$(ping -c 8 -q "${GATEWAY:-1.1.1.1}" 2>/dev/null | awk -F'/' '/avg/{print $5}')
-  kill $DLPID 2>/dev/null
+  LOADED=$(ping -c 6 -q "$TARGET" 2>/dev/null | awk -F'/' '/avg/{print $5}')
+  wait "$DLPID" 2>/dev/null
+  BYTES=$(tr -dc '0-9' < "$GOT"); rm -f "$GOT"
+  BYTES=${BYTES:-0}
+  MB=$(awk -v b="$BYTES" 'BEGIN { printf "%.0f", b / 1000000 }')
   note "Idle latency:   ${IDLE:-?} ms"
-  note "Loaded latency: ${LOADED:-?} ms"
-  if [ -n "${IDLE:-}" ] && [ -n "${LOADED:-}" ]; then
-    BLOAT=$(awk "BEGIN{printf \"%.0f\", ${LOADED}-${IDLE}}")
-    if [ "$BLOAT" -lt 30 ]; then ok "Bufferbloat +${BLOAT}ms — excellent (QoS working or not needed)"
-    elif [ "$BLOAT" -lt 100 ]; then warn "Bufferbloat +${BLOAT}ms — noticeable; enable Adaptive QoS on the ASUS"
-    else bad "Bufferbloat +${BLOAT}ms — severe; Adaptive QoS on the ASUS will transform responsiveness"; fi
+  note "Loaded latency: ${LOADED:-?} ms   (while downloading ${MB} MB)"
+  # A load test that never loaded the link would report "no bufferbloat" with a
+  # straight face. Under 1 MB transferred means the download failed or was
+  # blocked, so there is no comparison to make.
+  if [ "$BYTES" -lt 1000000 ]; then
+    warn "The test download never got going (${BYTES} bytes) — no result; try again later"
+  elif [ -n "${IDLE:-}" ] && [ -n "${LOADED:-}" ]; then
+    BLOAT=$(awk -v l="$LOADED" -v i="$IDLE" 'BEGIN { printf "%.0f", l - i }')
+    if [ "$BLOAT" -lt 30 ]; then ok "Bufferbloat +${BLOAT}ms — excellent (queue management working, or not needed)"
+    elif [ "$BLOAT" -lt 100 ]; then warn "Bufferbloat +${BLOAT}ms — noticeable; turn on your router's QoS / Smart Queue (SQM)"
+    else bad "Bufferbloat +${BLOAT}ms — severe; QoS / SQM on the router will transform responsiveness"; fi
+  else
+    warn "Could not measure latency to $TARGET — no result"
   fi
 else
   section "3. Bufferbloat"
@@ -144,95 +190,79 @@ fi
 # 4. LAN device census
 ############################################################
 section "4. LAN device census (who's on your network)"
+SUBNET=""
 if [ -z "${LOCALIP:-}" ]; then
-  # Previously this fell back to a hardcoded subnet — the author's own. If the
-  # local address could not be read, the script would ARP-sweep 254 addresses on
-  # a network the user may not even be attached to. Guessing is the wrong answer
-  # here: absence of a local IP is information, not a gap to paper over.
+  # No hardcoded fallback subnet: guessing one would mean sending 254 pings to
+  # a network you may not even be on. No local address is information.
   warn "No local IP detected — device census skipped"
-  echo "       Without a confirmed local address there is no way to know which"
-  echo "       subnet to sweep, and guessing one would mean sending 254 pings to"
-  echo "       a network you may not be on. Check the interface report above."
-  SUBNET=""
+  note "     Without a confirmed local address there is no way to know which subnet"
+  note "     to sweep. Check the interface report above."
 else
-  note "Populating ARP table (pinging your subnet)..."
-  SUBNET=$(echo "$LOCALIP" | cut -d. -f1-3)
+  note "Populating the ARP table (pinging your /24, 32 at a time)..."
+  SUBNET=$(printf '%s' "$LOCALIP" | cut -d. -f1-3)
 fi
 
 if [ -n "$SUBNET" ]; then
-
-# Throttled sweep. The previous version launched all 254 pings at once and then
-# just slept 3 seconds — a needless fork storm that never actually waited, so a
-# slow responder could land in the ARP table after the census had been read.
-# Batches of 32 with an explicit wait: bounded, and the table is complete before
-# it is read.
-i=1
-while [ "$i" -le 254 ]; do
-  j=0
-  while [ "$j" -lt 32 ] && [ "$i" -le 254 ]; do
-    ping -c1 -t1 "${SUBNET}.$i" >/dev/null 2>&1 &
-    i=$((i + 1)); j=$((j + 1))
+  # Throttled sweep: batches of 32 with an explicit wait, so the table is
+  # complete before it is read and there is no 254-process fork storm.
+  i=1
+  while [ "$i" -le 254 ]; do
+    j=0
+    while [ "$j" -lt 32 ] && [ "$i" -le 254 ]; do
+      ping -c1 -t1 "${SUBNET}.$i" >/dev/null 2>&1 &
+      i=$((i + 1)); j=$((j + 1))
+    done
+    wait
   done
-  wait
-done
 
-# macOS `arp` formats MACs with ether_ntoa(), which does NOT zero-pad octets:
-# a real entry can read 8:0:27:a:b:c (13 chars), not only 3c:7c:3f:1a:2b:cc
-# (17). Matching a fixed {17} silently dropped every device with a single-digit
-# octet — in a census whose entire purpose is "spot the device you can't
-# place", the dropped rows are the ones that matter.
-CENSUS=$(arp -an | grep "(${SUBNET}\." | while read -r line; do
-  IP=$(echo "$line" | grep -oE '\([0-9.]+\)' | tr -d '()')
-  MAC=$(echo "$line" | grep -oiE '([0-9a-f]{1,2}:){5}[0-9a-f]{1,2}')
-  [ -z "$MAC" ] && continue
-  printf "  %-16s %-20s\n" "$IP" "$MAC"
-done | sort -t. -k4 -n)
+  # macOS `arp` prints MACs without zero-padding (8:0:27:a:b:c), so the match
+  # accepts one- or two-digit octets; a fixed {17} would drop exactly the odd
+  # devices this census exists to surface.
+  CENSUS=$(arp -an | grep "(${SUBNET}\." | while read -r line; do
+    IP=$(printf '%s' "$line" | grep -oE '\([0-9.]+\)' | tr -d '()')
+    MAC=$(printf '%s' "$line" | grep -oiE '([0-9a-f]{1,2}:){5}[0-9a-f]{1,2}')
+    [ -z "$MAC" ] && continue
+    NOTE=""
+    [ "$(mac_kind "$MAC")" = "private" ] && NOTE="private (randomized) address"
+    [ "$IP" = "${GATEWAY:-}" ] && NOTE="your router"
+    [ "$IP" = "${LOCALIP:-}" ] && NOTE="this Mac"
+    printf "  %-16s %-20s %s\n" "$IP" "$MAC" "$NOTE"
+  done | sort -t. -k4 -n)
 
-echo
-printf "  %-16s %-20s\n" "IP" "MAC"
-[ -n "$CENSUS" ] && echo "$CENSUS"
-
-# Count the rows actually shown. Counting raw `arp` lines included
-# "(incomplete)" entries, so the total disagreed with the table beneath it.
-COUNT=$(printf '%s' "$CENSUS" | grep -c ':' || true)
-echo
-note "${COUNT} device(s) responded. Match each to something you own. An IP+MAC"
-note "you can't place is worth investigating in your router's client list, which"
-note "shows device names the raw ARP table can't."
-
-fi   # end: SUBNET known
+  echo
+  printf "  %-16s %-20s %s\n" "IP" "MAC" "NOTE"
+  [ -n "$CENSUS" ] && printf '%s\n' "$CENSUS"
+  COUNT=$(printf '%s' "$CENSUS" | grep -c ':' || true)
+  echo
+  note "${COUNT} device(s) in the table. Match each to"
+  note "something you own. \"private\" addresses are usually phones and laptops with"
+  note "Private Wi-Fi Address on; your router's client list shows their names."
+fi
 
 ############################################################
-# 5. ASUS settings audit
+# 5. Router settings audit
 ############################################################
-section "5. ASUS router settings to verify (GUI: router.asus.com)"
+section "5. Router settings to verify"
 cat <<'EOF'
-  Log into router.asus.com and confirm each. High-impact ones first:
-
-  SPEED / EFFICIENCY
-    - Adaptive QoS > enable ONLY if bufferbloat above was noticeable
-    - Wireless > confirm 160MHz channel width on 5GHz (if devices support it)
-    - Wireless > Smart Connect on (lets the mesh steer devices to best band)
-    - Ethernet backhaul: if nodes are wired to each other, confirm GUI shows
-      "Wired" backhaul — wireless backhaul halves throughput at the far node
-    - Firmware > update if one is available
+  Open your router's admin page or app (its address is the gateway above) and
+  confirm each. Names vary by brand; the setting is the same. Security first:
 
   SECURITY
-    - Administration > "Enable Web Access from WAN" = OFF
-    - WPA2/WPA3 Personal encryption; disable WPS (clear the AP PIN)
-    - Protected Management Frames = Capable (hardens against deauth floods)
-    - AiProtection ON — flags devices contacting malicious hosts
-    - Guest Network for IoT/visitors, intranet access OFF
-    - Review the client list; block any device you can't identify
+    - Remote / WAN administration OFF — manage it from inside your network only
+    - Admin password changed from the default; firmware auto-update ON if offered
+    - Wi-Fi security WPA3, or WPA2/WPA3 mixed; WPS OFF
+    - Protected Management Frames (802.11w) = Capable or Required
+    - UPnP OFF unless a console or game needs it — it lets any device on the
+      LAN open ports to the internet without asking you
+    - Guest network for visitors and smart-home gear, with LAN access OFF
+    - Review the client list; block anything nobody in the house can identify
 
-  DNS
-    - WAN > DNS: 1.1.1.1 / 1.0.0.1 or 8.8.8.8 if the ISP resolver is slow
+  SPEED
+    - QoS / Smart Queue (SQM) ON only if --load showed noticeable bufferbloat
+    - Mesh: if nodes are cabled together, confirm the backhaul shows as wired —
+      a wireless backhaul roughly halves throughput at the far node
+    - Band steering / smart connect ON, so devices land on the best band
 EOF
-
-echo
-note "${BOLD}If the ASUS has SSH enabled${RST} (Administration > System > Enable SSH),"
-note "read-only diagnostics from Terminal:  ssh admin@${GATEWAY:-<your-router-ip>}"
-note "  nvram get wl1_chanspec   (5GHz channel)   cat /proc/loadavg  (router load)"
 
 echo
 echo "${BOLD}Check complete.${RST} Read-only — nothing was changed."
