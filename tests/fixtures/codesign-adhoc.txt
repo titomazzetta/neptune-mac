@@ -1,0 +1,9 @@
+Executable=/opt/homebrew/Cellar/redis/8.2.1/bin/redis-server
+Identifier=redis-server
+Format=Mach-O thin (arm64)
+CodeDirectory v=20400 size=12345 flags=0x20002(adhoc,linker-signed) hashes=380+0 location=embedded
+Signature=adhoc
+Info.plist=not bound
+TeamIdentifier=not set
+Sealed Resources=none
+Internal requirements=none
