@@ -3,7 +3,8 @@
 # blast_radius.sh — What do the destructive scripts actually delete?
 #
 # uninstall.sh and remove_mackeeper.sh are the only things in Neptune that run
-# `rm -rf` as root, and until this file existed the only automated check on them
+# `rm -rf` as root (clean_caches.sh, the third destructive script, runs it as
+# you, on your own caches — and is tested here the same way), and until this file existed the only automated check on them
 # was "the source contains a confirmation prompt". That verifies the safety gate
 # exists; it says nothing about what is behind it. The risk in these scripts was
 # never a missing prompt — it is a glob that matches one character too many.
@@ -103,6 +104,10 @@ PLIST
   echo keep > "$SANDBOX/Library/LaunchDaemons/com.apple.something.plist"
   mkdir -p "$SANDBOX/Library/PrivilegedHelperTools"
   echo keep > "$SANDBOX/Library/PrivilegedHelperTools/com.other.helper"
+  # 5. the target name continued by a NON-ASCII letter — one word, not two.
+  #    Under LC_ALL=C those are bytes above 0x7F, which must not read as a
+  #    word boundary.
+  mkdir -p "$FAKE_HOME/Library/Application Support/Dovetailé"
 }
 
 # Every path in the fixture that must still exist afterwards.
@@ -118,6 +123,7 @@ $FAKE_HOME/Library/Preferences/com.apple.finder.plist
 $FAKE_HOME/Library/Application Support/Keystone
 $FAKE_HOME/Library/Application Support/Firefox
 $FAKE_HOME/Library/Caches/com.acmecorp.dovetailer
+$FAKE_HOME/Library/Application Support/Dovetailé
 EOF
 }
 
@@ -143,7 +149,8 @@ STUB
 }
 
 delete_set() { # <script> <args...> -> the machine-readable block, sorted
-  PATH="$STUBS:$PATH" NEPTUNE_ROOT="$SANDBOX" HOME="$FAKE_HOME" "$REPO/scripts/$@" 2>/dev/null \
+  local S=$1; shift
+  PATH="$STUBS:$PATH" NEPTUNE_ROOT="$SANDBOX" HOME="$FAKE_HOME" "$REPO/scripts/$S" "$@" 2>/dev/null \
     | sed -n '/^DELETE-SET BEGIN$/,/^DELETE-SET END$/p' \
     | sed '1d;$d' | sort
 }
@@ -309,6 +316,80 @@ check_refusal() { # <script> <args...>
 }
 check_refusal uninstall.sh Dovetail --dry-run
 check_refusal remove_mackeeper.sh --dry-run
+check_refusal clean_caches.sh
+
+############################################################
+t_section "clean_caches.sh — what 'all' can reach"
+############################################################
+# The cache cleaner is the one destructive script whose targets the user picks
+# by NUMBER, so the hostile cases are about what gets numbered at all: Apple's
+# caches, iCloud state, Homebrew's cache, and — the dangerous one — a "cache"
+# folder that is really a symlink into Documents. "all" must reach none of them.
+mb() { mkdir -p "$(dirname "$1")"; dd if=/dev/zero of="$1" bs=1024 count="$2" 2>/dev/null; }
+build_caches() {
+  build_fixture
+  local C="$FAKE_HOME/Library/Caches"
+  mb "$C/com.example.editor/blob" 2048
+  mb "$C/com.example.big/a/b/blob" 3072
+  mb "$C/com.example.linky/blob" 2048
+  mb "$C/com.apple.Safari/blob" 2048
+  mb "$C/CloudKit/blob" 2048
+  mb "$C/Homebrew/downloads/blob" 2048
+  mb "$C/com.example.tiny/blob" 8
+  mb "$FAKE_HOME/Documents/precious.txt" 2048
+  ln -s "$FAKE_HOME/Documents" "$C/com.example.escape"
+  # a link INSIDE a cache that points out of it: rm -rf must remove the link,
+  # never follow it
+  ln -s "$FAKE_HOME/Documents" "$C/com.example.linky/docs-link"
+}
+clean() { # <stdin-script> <args...>
+  local IN=$1; shift
+  printf '%b' "$IN" | NEPTUNE_ROOT="$SANDBOX" HOME="$FAKE_HOME" "$REPO/scripts/clean_caches.sh" "$@" 2>&1
+}
+C="$FAKE_HOME/Library/Caches"
+
+build_caches
+BEFORE=$(find "$SANDBOX" | sort)
+clean '' >/dev/null; RC=$?
+AFTER=$(find "$SANDBOX" | sort)
+t_is "report mode exits 0" "0" "$RC"
+t_is "report mode changes nothing" "" "$(diff <(echo "$BEFORE") <(echo "$AFTER"))"
+
+CSET=$(clean 'all\n' --apply --dry-run | sed -n '/^DELETE-SET BEGIN$/,/^DELETE-SET END$/p' | sed '1d;$d' | cut -f2 | sort)
+t_is "'all' selects exactly the third-party caches over 1 MB" \
+  "$(printf '%s\n' "$C/com.example.big" "$C/com.example.editor" "$C/com.example.linky" | sort)" "$CSET"
+AFTER=$(find "$SANDBOX" | sort)
+t_is "--apply --dry-run changes nothing" "" "$(diff <(echo "$BEFORE") <(echo "$AFTER"))"
+
+############################################################
+t_section "clean_caches.sh — the real clear"
+############################################################
+build_caches
+clean '9\n' --apply >/dev/null; RC=$?
+t_is "an out-of-range selection is refused" "1" "$RC"
+t_is "...and changes nothing" "yes" "$([ -f "$C/com.example.big/a/b/blob" ] && echo yes || echo no)"
+clean 'all\nno\n' --apply >/dev/null
+t_is "anything but 'yes' changes nothing" "yes" "$([ -f "$C/com.example.editor/blob" ] && echo yes || echo no)"
+clean 'all\ny\n' --apply >/dev/null
+t_is "a bare 'y' is not 'yes'" "yes" "$([ -f "$C/com.example.editor/blob" ] && echo yes || echo no)"
+
+clean 'all\nyes\n' --apply >/dev/null
+for D in com.example.editor com.example.big com.example.linky; do
+  t_is "$D is emptied, and the folder itself kept" "dir:0" \
+    "$([ -d "$C/$D" ] && echo dir || echo gone):$(find "$C/$D" -mindepth 1 | wc -l | tr -d ' ')"
+done
+for K in "$C/com.apple.Safari/blob" "$C/CloudKit/blob" "$C/Homebrew/downloads/blob" \
+         "$C/com.example.tiny/blob" "$FAKE_HOME/Documents/precious.txt"; do
+  t_is "survives: ${K#"$FAKE_HOME"/}" "yes" "$([ -f "$K" ] && echo yes || echo no)"
+done
+t_is "the symlinked 'cache' is still a symlink to Documents" "yes" \
+  "$([ -L "$C/com.example.escape" ] && echo yes || echo no)"
+
+build_caches
+rm -rf "$C"; mkdir -p "$FAKE_HOME/Documents"; ln -s "$FAKE_HOME/Documents" "$C"
+OUT=$(clean 'all\nyes\n' --apply); RC=$?
+t_is "refuses when ~/Library/Caches itself is a symlink" "1" "$RC"
+t_is "...and Documents is untouched" "yes" "$([ -f "$FAKE_HOME/Documents/precious.txt" ] && echo yes || echo no)"
 
 ############################################################
 printf '\n================================================\n'

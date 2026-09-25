@@ -24,6 +24,7 @@
 # mutates until after the inventory is on screen.
 
 set -u
+export LC_ALL=C   # byte-safe, platform-identical text tools — see the note in neptune.sh
 
 BOLD=$(tput bold 2>/dev/null || true)
 RED=$(tput setaf 1 2>/dev/null || true)
@@ -220,7 +221,7 @@ esac
 if ! $SANDBOX; then
   info "Requesting administrator privileges (sudo)..."
   sudo -v || { fail "Could not obtain sudo. Aborting."; exit 1; }
-  ( while true; do sudo -n true 2>/dev/null; sleep 50; done ) &
+  ( while true; do sudo -n true 2>/dev/null; sleep 50; done ) >/dev/null 2>&1 </dev/null &
   SUDO_KEEPALIVE=$!
   trap 'kill $SUDO_KEEPALIVE 2>/dev/null' EXIT
 fi

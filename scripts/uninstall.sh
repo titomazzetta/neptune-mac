@@ -18,6 +18,7 @@
 # Never deletes anything without showing it first. Never runs unattended.
 
 set -u
+export LC_ALL=C   # byte-safe, platform-identical text tools — see the note in neptune.sh
 
 BOLD=$(tput bold 2>/dev/null || true)
 RED=$(tput setaf 1 2>/dev/null || true)
@@ -263,16 +264,23 @@ NEARMISS=()
 #
 # bash 3.2: `case` with a quoted variable in the pattern matches it literally,
 # so a term containing glob metacharacters cannot widen the match.
+#
+# A boundary is an ASCII non-alphanumeric byte and nothing else. Under LC_ALL=C
+# an accented letter is two bytes above 0x7F, and a plain [!a-z0-9] would count
+# them as a boundary — so `./uninstall.sh Mail` would have taken "Mailé". The
+# high byte range is part of the word class instead: when unsure, match less.
 # ---------------------------------------------------------------------------
+WORDCH=$'a-z0-9\x80-\xff'
+
 lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 
 whole_word() {  # <haystack> <needle> — both lowercased by the caller
   local H=$1 N=$2
   case "$H" in
     "$N")                     return 0 ;;
-    "$N"[!a-z0-9]*)           return 0 ;;
-    *[!a-z0-9]"$N")           return 0 ;;
-    *[!a-z0-9]"$N"[!a-z0-9]*) return 0 ;;
+    "$N"[!$WORDCH]*)              return 0 ;;
+    *[!$WORDCH]"$N")              return 0 ;;
+    *[!$WORDCH]"$N"[!$WORDCH]*)   return 0 ;;
   esac
   return 1
 }
