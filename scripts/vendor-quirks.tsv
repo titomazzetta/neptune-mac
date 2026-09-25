@@ -48,3 +48,4 @@ com.microsoft.autoupdate	Microsoft	Microsoft AutoUpdate, installed by any Office
 com.adobe	Adobe	Adobe's Creative Cloud helpers install several root daemons and launch agents.
 com.valvesoftware	Valve	Steam's cleanup agent.
 com.epicgames	Epic	The Epic Games launcher's login item.
+homebrew.mxcl.	Homebrew	A background service started with `brew services`. Homebrew binaries carry only the ad-hoc signature the linker adds on Apple silicon, with no developer identity, so they read as ad-hoc signed. That is how Homebrew ships; it also means the signature cannot tell you who built the file.
