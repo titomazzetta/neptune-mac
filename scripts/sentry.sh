@@ -27,6 +27,7 @@
 #   ./sentry.sh --rebaseline    accept current state as the new known-good
 
 set -u
+export LC_ALL=C   # byte-safe text tools on macOS — see the note in neptune.sh
 
 BOLD=$(tput bold 2>/dev/null || true)
 RED=$(tput setaf 1 2>/dev/null || true)
@@ -41,8 +42,7 @@ BASE="$HOME/.sentry"
 # indistinguishable from a real incident — so a format change must reset the
 # baseline explicitly and say it did, never diff across the boundary.
 BASELINE_FORMAT=2
-REPORT="$HOME/Desktop/sentry_report_$(date '+%Y-%m-%d_%H%M').txt"
-mkdir -p "$BASE"
+REPORT="${NEPTUNE_REPORT_DIR:-$HOME/Desktop}/sentry_report_$(date '+%Y-%m-%d_%H%M').txt"
 FLAGS=()
 
 # Structured finding records. When NEPTUNE_FINDINGS is set (neptune.sh sets it),
@@ -55,15 +55,17 @@ FLAGS=()
 # colour helpers are duplicated the same way.
 SCAN=sentry
 CATEGORY=security          # reset per section below
+CHECK=""                   # reset per check below — see the record format in neptune.sh
 record() {
   [ -n "${NEPTUNE_FINDINGS:-}" ] || return 0
-  printf '%s|%s|%s|%s\n' "$1" "$CATEGORY" "$SCAN" \
-    "$(printf '%s' "$2" | tr '|' '/' | tr -d '\n')" >> "$NEPTUNE_FINDINGS"
+  printf '%s|%s|%s|%s|%s\n' "$1" "$CATEGORY" "$SCAN" "$CHECK" \
+    "$(printf '%s' "$2" | tr '|\t\n' '/  ')" >> "$NEPTUNE_FINDINGS"
 }
 
 out()     { echo "$@" | tee -a "$REPORT"; }
 section() { out ""; out "${BOLD}${CYN}== $* ==${RST}"; }
-ok()      { out "  ${GRN}[ok]${RST} $*"; }
+ok()      { out "  ${GRN}[ok]${RST} $*"; }                        # prints only
+pass()    { out "  ${GRN}[ok]${RST} $*"; record pass "$*"; }      # a check that ran clean
 warn()    { out "  ${YEL}[!!]${RST} $*"; record notice "$*"; }
 flag()    { FLAGS+=("$*"); out "  ${RED}[FLAG]${RST} $*"; record attention "$*"; }
 unknown() { out "  ${YEL}[!!]${RST} $*"; record unknown "$*"; }
@@ -75,19 +77,45 @@ unknown() { out "  ${YEL}[!!]${RST} $*"; record unknown "$*"; }
 info()    { out "  ${YEL}[!!]${RST} $*"; record info "$*"; }
 
 
+# sig <path> — apple | signed:<who> | adhoc | unsigned | missing.
+# Same contract as redflag_scan.sh, and tests/unit.sh asserts the two copies
+# classify every fixture identically. "adhoc" — a valid signature that names no
+# signer — is its own class; it used to pass as "signed" (DEVLOG Bug 16).
 sig() {
-  local BIN=$1
+  local BIN=$1 INFO AUTH
   [ -e "$BIN" ] || { echo "missing"; return; }
-  if codesign -v "$BIN" 2>/dev/null; then
-    local AUTH
-    AUTH=$(codesign -dvv "$BIN" 2>&1 | grep -m1 '^Authority=' | cut -d= -f2)
-    case "$AUTH" in
-      "Software Signing"|"Apple Mac OS Application Signing") echo "apple" ;;
-      *) echo "signed" ;;
-    esac
-  else
-    echo "UNSIGNED"
-  fi
+  if ! codesign -v "$BIN" 2>/dev/null; then echo "unsigned"; return; fi
+  INFO=$(codesign -dvv "$BIN" 2>&1)
+  case "$INFO" in *"Signature=adhoc"*) echo "adhoc"; return ;; esac
+  AUTH=$(printf '%s\n' "$INFO" | grep -m1 '^Authority=' | cut -d= -f2)
+  case "$AUTH" in
+    "Software Signing"|"Apple Mac OS Application Signing") echo "apple" ;;
+    "") echo "adhoc" ;;
+    *) echo "signed:$AUTH" ;;
+  esac
+}
+
+# listener_entries — `lsof -i -P -n` output on stdin, baseline entries out.
+#
+# Collapses listener ports in the dynamic/ephemeral range (49152-65535).
+# macOS reassigns those at every boot, so the port NUMBER is churn while the
+# process and the interface scope are the actual signal. Unsuppressed,
+# rapportd and Splice alone produced 6 of 10 flags on a known-clean machine
+# — noise that teaches you to skim the flag list, which is how a real
+# finding gets missed.
+#
+# This does NOT blind the check: a listening process that wasn't there
+# before still appears, and one that moves from loopback to all-interfaces
+# still changes its entry. Only the per-boot number is dropped. Fixed ports
+# (anything below 49152) are recorded exactly as before.
+listener_entries() {
+  awk '
+    $NF ~ /LISTEN/ {
+      addr = $9
+      n = split(addr, p, ":")
+      if (p[n] + 0 >= 49152 && p[n] + 0 <= 65535) sub(/:[0-9]+$/, ":ephemeral", addr)
+      print "listener:" $1 ":" addr
+    }' | sort -u
 }
 
 # ---------------------------------------------------------------------------
@@ -100,6 +128,8 @@ sig() {
 # ---------------------------------------------------------------------------
 [ "${NEPTUNE_LIB:-}" = "1" ] && return 0
 
+mkdir -p "$BASE"
+
 REBASE=false
 [ "${1:-}" = "--rebaseline" ] && REBASE=true
 
@@ -108,7 +138,10 @@ if [ "$(id -u)" -eq 0 ]; then echo "Run as normal user, not sudo."; exit 1; fi
 : > "$REPORT"
 out "${BOLD}Sentry — $(hostname) — $(date '+%Y-%m-%d %H:%M')${RST}"
 sudo -v || exit 1
-( while true; do sudo -n true 2>/dev/null; sleep 50; done ) & KA=$!
+# Keep-alive for the cached sudo credential. Its output is detached: the loop's
+# `sleep` outlives a kill of the loop by up to 50 s, and while it holds this
+# script's stdout, `neptune.sh`'s `| tee` waits for it (found in review).
+( while true; do sudo -n true 2>/dev/null; sleep 50; done ) >/dev/null 2>&1 </dev/null & KA=$!
 trap 'kill $KA 2>/dev/null' EXIT
 
 ############################################################
@@ -131,24 +164,8 @@ snapshot() {
       [ -e "$A" ] || continue
       echo "app:$(basename "$A")"
     done
-    # Collapse listener ports in the dynamic/ephemeral range (49152-65535).
-    # macOS reassigns those at every boot, so the port NUMBER is churn while the
-    # process and the interface scope are the actual signal. Unsuppressed,
-    # rapportd and Splice alone produced 6 of 10 flags on a known-clean machine
-    # — noise that teaches you to skim the flag list, which is how a real
-    # finding gets missed.
-    #
-    # This does NOT blind the check: a listening process that wasn't there
-    # before still appears, and one that moves from loopback to all-interfaces
-    # still changes its entry. Only the per-boot number is dropped. Fixed ports
-    # (anything below 49152) are recorded exactly as before.
-    sudo lsof -i -P -n 2>/dev/null | awk '
-      $NF ~ /LISTEN/ {
-        addr = $9
-        n = split(addr, p, ":")
-        if (p[n] + 0 >= 49152 && p[n] + 0 <= 65535) sub(/:[0-9]+$/, ":ephemeral", addr)
-        print "listener:" $1 ":" addr
-      }' | sort -u
+    # Listening sockets, with per-boot ephemeral port numbers collapsed.
+    sudo lsof -i -P -n 2>/dev/null | listener_entries
   } | sort -u
 }
 
@@ -159,10 +176,11 @@ snapshot > "$CURRENT"
 FORMATFILE="$BASE/format"
 STORED_FORMAT=$(cat "$FORMATFILE" 2>/dev/null || echo 1)
 
+CHECK=baseline-diff
 if [ ! -f "$BASELINE" ] || $REBASE; then
   cp "$CURRENT" "$BASELINE"
   echo "$BASELINE_FORMAT" > "$FORMATFILE"
-  ok "Baseline $( $REBASE && echo 're-established' || echo 'created' ): $(wc -l < "$BASELINE" | xargs) items now known-good"
+  info "Baseline $( $REBASE && echo 're-established' || echo 'created' ): $(wc -l < "$BASELINE" | xargs) items are now the known-good snapshot"
   out "  Future runs will flag anything that appears or disappears."
 elif [ "$STORED_FORMAT" != "$BASELINE_FORMAT" ]; then
   cp "$CURRENT" "$BASELINE"
@@ -174,14 +192,21 @@ elif [ "$STORED_FORMAT" != "$BASELINE_FORMAT" ]; then
   out "      cross-format diff would have looked like dozens of new listeners."
   out "      Re-run ./sentry.sh to compare against the new baseline."
 else
-  NEW=$(comm -13 "$BASELINE" "$CURRENT")
-  GONE=$(comm -23 "$BASELINE" "$CURRENT")
+  # comm needs both sides sorted in the SAME collation. Baselines written before
+  # the scans switched to the C locale were sorted under UTF-8 rules, and comm
+  # on mismatched orderings reports phantom NEW/REMOVED lines — the exact wall
+  # of noise the format guard above exists to prevent. Re-sorting both sides
+  # here keeps every existing baseline valid.
+  NEW=$(comm -13 <(sort "$BASELINE") <(sort "$CURRENT"))
+  GONE=$(comm -23 <(sort "$BASELINE") <(sort "$CURRENT"))
   if [ -z "$NEW" ] && [ -z "$GONE" ]; then
-    ok "No changes since baseline ($(stat -f '%Sm' -t '%Y-%m-%d' "$BASELINE")) — persistence, helpers, extensions, apps, and listeners all stable"
+    pass "Nothing has changed since the baseline of $(stat -f '%Sm' -t '%Y-%m-%d' "$BASELINE") — persistence, helpers, extensions, apps and listeners all stable"
   else
     if [ -n "$NEW" ]; then
       out "  ${RED}NEW since baseline:${RST}"
-      while IFS= read -r L; do flag "NEW: $L"; done <<< "$NEW"
+      while IFS= read -r L; do flag "NEW since baseline: $L"; done <<EOF
+$NEW
+EOF
     fi
     if [ -n "$GONE" ]; then
       out "  ${YEL}Removed since baseline:${RST}"
@@ -196,8 +221,14 @@ fi
 # 2. PROCESS -> NETWORK MAP
 ############################################################
 CATEGORY=security
+CHECK=network-signing
 section "2. Process -> network map"
 
+# In the suite, redflag_scan.sh owns the signing check for LISTENING processes,
+# so a listener is only printed here, not flagged. The old suite reported one
+# unsigned localhost service four times — its launch agent, its IPv4 listener,
+# its IPv6 listener and here — and deducted for each (DEVLOG Bug 17).
+NET_PROBLEMS=0
 out "  ${BOLD}Processes with network activity (listeners and outbound):${RST}"
 while read -r NAME PID; do
   BIN=$(ps -p "$PID" -o comm= 2>/dev/null)
@@ -210,21 +241,39 @@ while read -r NAME PID; do
   LINE="$NAME (pid $PID) — sig:$S — outbound:$ESTAB"
   [ -n "$LISTENS" ] && LINE="$LINE — LISTENING on: $LISTENS"
   case "$S" in
-    UNSIGNED)
+    unsigned|adhoc)
       case "$BIN" in
-        /System/*|/usr/*) out "      $LINE" ;;   # some Apple daemons resist codesign query
-        *) flag "Unsigned process with network access: $LINE ($BIN)" ;;
+        /System/*|/usr/bin/*|/usr/sbin/*|/usr/libexec/*|/sbin/*) out "      $LINE" ;;  # SIP-protected Apple code
+        *)
+          if [ -n "${NEPTUNE_SUITE:-}" ] && [ -n "$LISTENS" ]; then
+            out "      $LINE   (listener — signing checked by redflag_scan.sh)"
+          else
+            NET_PROBLEMS=$((NET_PROBLEMS + 1))
+            if [ "$S" = "adhoc" ]; then
+              flag "Ad-hoc signed process with network access: $LINE ($BIN)"
+            else
+              flag "Unsigned process with network access: $LINE ($BIN)"
+            fi
+          fi ;;
       esac ;;
-    missing) flag "Network-active process whose binary can't be found: $LINE" ;;
+    missing) NET_PROBLEMS=$((NET_PROBLEMS + 1)); flag "Network-active process whose binary cannot be found: $LINE" ;;
     *) out "      $LINE" ;;
   esac
 done < <(sudo lsof -i -P -n 2>/dev/null | awk 'NR>1 {print $1, $2}' | sort -u)
+[ "$NET_PROBLEMS" -eq 0 ] && pass "Every process with network activity is signed by Apple or an identified developer"
 
 ############################################################
 # 3. NETWORK HEALTH
 ############################################################
 CATEGORY=network
 section "3. Network health"
+
+# In the suite, network_check.sh owns latency and double NAT. Running both used
+# to report one double NAT twice and two different latencies for the same router
+# in the same report (DEVLOG Bug 9c). Standalone, sentry still does both.
+if [ -n "${NEPTUNE_SUITE:-}" ]; then
+  out "  Covered by network_check.sh in this suite (latency, DNS, double NAT)."
+else
 
 GATEWAY=$(route -n get default 2>/dev/null | awk '/gateway/{print $2}')
 
@@ -241,12 +290,15 @@ GW_MAX=$(printf  '%s' "$GW_RTT" | awk '{print $2}')
 NET_PING=$(rtt 1.1.1.1 | awk '{print $1}')
 out "  Gateway ${GATEWAY:-?}: ${GW_PING:-?} ms avg / ${GW_MAX:-?} ms worst (5 pings) | Internet: ${NET_PING:-?} ms avg"
 
+CHECK=lan-latency
 if [ -n "${GW_PING:-}" ] && [ -n "${NET_PING:-}" ]; then
   if awk "BEGIN{exit !($GW_PING > 15)}"; then
     warn "LAN latency high (${GW_PING}ms average to your own router over 5 pings) — mesh backhaul or Wi-Fi issue"
   else
-    ok "LAN latency healthy"
+    pass "LAN latency is healthy (${GW_PING} ms average to your router)"
   fi
+else
+  unknown "LAN latency could not be measured (no ping reply from the gateway)"
 fi
 
 # DNS timing
@@ -265,11 +317,13 @@ for H in $HOPS; do
     10.*|192.168.*|172.1[6-9].*|172.2[0-9].*|172.3[0-1].*) EXTRA_PRIV="$EXTRA_PRIV $H" ;;
   esac
 done
+CHECK=double-nat
 if [ -z "$EXTRA_PRIV" ]; then
-  ok "Single NAT — no double-NAT regression"
+  pass "Single NAT — no second private router between this Mac and the internet"
 else
   flag "Possible double NAT: private router(s) beyond your gateway:$EXTRA_PRIV — verify: if your router's WAN IP is private (192.168.x/10.x), double NAT is real; if it shows your public IP, this is IP-passthrough echo and is fine"
 fi
+fi   # end: standalone network health
 
 ############################################################
 # 4. APP USAGE & STALENESS
@@ -310,7 +364,13 @@ fi
 
 out ""
 out "  ${BOLD}Stale (6+ months unused, date-confirmed) — deletion candidates:${RST}"
+CHECK=stale-apps
 if [ ${#STALE[@]} -gt 0 ]; then
+  # ONE finding for the lot. Six unused apps are one decision to review, not six
+  # problems, and six separate findings would dominate the bloat score.
+  STALE_NAMES=$(for A in "${STALE[@]}"; do printf '%s\n' "${A%% (v*}"; done | head -5 | awk 'BEGIN{ORS=""} {print (NR>1 ? ", " : "") $0}')
+  [ ${#STALE[@]} -gt 5 ] && STALE_NAMES="$STALE_NAMES and $(( ${#STALE[@]} - 5 )) more"
+  warn "${#STALE[@]} app(s) have not been opened in over six months: $STALE_NAMES"
   for A in "${STALE[@]}"; do out "      ${YEL}$A${RST}"; done
   out ""
   out "      Unused apps aren't just disk space — several may still have launch"
@@ -318,7 +378,7 @@ if [ ${#STALE[@]} -gt 0 ]; then
   out "      Review before deleting: some are drivers/editors for hardware you"
   out "      own but rarely reconfigure (those are fine to keep)."
 else
-  out "      none with confirmed dates"
+  pass "No app with a confirmed last-used date has gone unopened for six months"
 fi
 
 if [ ${#NODATA[@]} -gt 0 ]; then
@@ -347,3 +407,4 @@ else
 fi
 out ""
 out "Report saved to: $REPORT"
+exit 0
