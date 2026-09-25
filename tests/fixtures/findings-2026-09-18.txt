@@ -1,0 +1,32 @@
+attention|security|sentry|network-signing|Unsigned process with network access: WavesLoca (pid 4500) — sig:UNSIGNED — outbound:3 — LISTENING on: [::1]:6985 127.0.0.1:6985  (/Library/Application Support/Waves/WavesLocalServer/WavesLocalServer.bundle/Contents/MacOS/WavesLocalServer)
+attention|network|sentry|double-nat|Possible double NAT: private router(s) beyond your gateway: 10.0.0.1 — verify: if your router's WAN IP is private (192.168.x/10.x), double NAT is real; if it shows your public IP, this is IP-passthrough echo and is fine
+info|security|sentry|baseline-diff|Baseline format changed (v1 -> v2); baseline REPLACED, nothing diffed this run
+notice|network|sentry|lan-latency|LAN latency high (38.555ms average to your own router over 5 pings) — mesh backhaul or Wi-Fi issue
+pass|bloat|sentry|stale-apps|No app with a confirmed last-used date has gone unopened for six months
+pass|security|redflag|sip|System Integrity Protection is enabled
+pass|security|redflag|gatekeeper|Gatekeeper is enabled
+notice|security|redflag|firewall|Application firewall is OFF — a common default, but worth enabling on any machine that joins public Wi-Fi
+attention|security|redflag|persistence-launchd|UNSIGNED persistence: com.sonarworks.soundid.reference.systemwide runs /Applications/SoundID Reference.app/Contents/MacOS/SoundID Reference (/Users/exampleuser/Library/LaunchAgents/com.sonarworks.soundid.reference.systemwide.plist)
+attention|security|redflag|persistence-launchd|UNSIGNED persistence: com.waves.wls.agent runs /Library/Application Support/Waves/WavesLocalServer/WavesLocalServer.bundle/Contents/MacOS/WavesLocalServer (/Library/LaunchAgents/com.waves.wls.agent.plist)
+attention|security|redflag|persistence-launchd|UNSIGNED persistence: com.docker.socket runs /Library/PrivilegedHelperTools/com.docker.socket (/Library/LaunchDaemons/com.docker.socket.plist)
+attention|security|redflag|persistence-launchd|UNSIGNED persistence: com.paceap.eden.licensed runs /Library/PrivilegedHelperTools/licenseDaemon.app/Contents/MacOS/licenseDaemon (/Library/LaunchDaemons/com.paceap.eden.licensed.plist)
+attention|security|redflag|privileged-helpers|UNSIGNED privileged helper (runs as root): /Library/PrivilegedHelperTools/com.docker.socket
+attention|security|redflag|privileged-helpers|UNSIGNED privileged helper (runs as root): /Library/PrivilegedHelperTools/licenseDaemon.app
+pass|security|redflag|cron-user|No user crontab
+pass|security|redflag|cron-root|No root crontab
+pass|security|redflag|login-hook|No login hook is configured
+pass|security|redflag|startup-items|No legacy StartupItems
+pass|security|redflag|etc-crontab|/etc/crontab has no entries
+pass|security|redflag|process-location|No process is running from /tmp, Downloads or /Users/Shared
+attention|security|redflag|listeners|Listener with unverifiable signature: WavesLoca (pid 4500) on [::1]:6985 [localhost-only] binary:/Library/Application Support/Waves/WavesLocalServer/WavesLocalServer.bundle/Contents/MacOS/WavesLocalServer
+attention|security|redflag|listeners|Listener with unverifiable signature: WavesLoca (pid 4500) on 127.0.0.1:6985 [localhost-only] binary:/Library/Application Support/Waves/WavesLocalServer/WavesLocalServer.bundle/Contents/MacOS/WavesLocalServer
+pass|security|redflag|proxy|No system proxy is enabled
+pass|security|redflag|net-extensions|No network-filter or endpoint-security extension is registered
+pass|security|redflag|config-profiles|No configuration profiles are installed
+pass|security|redflag|etc-hosts|/etc/hosts is stock
+attention|network|network|double-nat|SECOND PRIVATE ROUTER in path: 10.0.0.1 (beyond your gateway 192.168.1.1)
+pass|network|network|gateway-latency|Gateway latency is healthy (9.372 ms average over 5 pings)
+pass|network|network|dns|DNS resolves (3 of 3 test lookups answered)
+info|network|network|connections-view|Unprivileged view: only your own processes are listed here; root-owned daemons are not covered by this scan
+notice|maintenance|updates|brew-outdated|11 Homebrew formulae have updates available
+notice|maintenance|updates|brew-outdated|10 Homebrew casks have updates available
