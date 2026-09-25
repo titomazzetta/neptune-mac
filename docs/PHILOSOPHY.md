@@ -36,11 +36,12 @@ These aren't features; they're the ethos. Every decision serves them.
 
 1. **On-demand, never resident.** No launch agents, no cron, no menu-bar process.
    The tool that promises to reduce background load must not *be* background load.
-2. **Read-only by default.** Of the nine scripts, only two delete anything, and
-   both show you everything first and require typed confirmation. (`sentry.sh`
-   writes its own baseline files; `check_updates.sh` installs only with an
-   explicit `--upgrade`. The other five touch nothing at all.) A cleaner that
-   deletes silently is how you lose data; Neptune never does.
+2. **Read-only by default.** Of the ten scripts, three delete anything — the two
+   uninstallers and the cache cleaner — and all three show you everything first
+   and require a typed confirmation. (`sentry.sh` writes its own baseline files;
+   `check_updates.sh` installs only with an explicit `--upgrade`, asking per
+   source. The rest touch nothing at all.) A cleaner that deletes silently is how
+   you lose data; Neptune never does.
 3. **Human-in-the-loop for destructive actions.** The safety of the tool is that a
    person is at the keyboard when files are removed as root. This is deliberately
    *not* automated away — not even for an AI agent (see "Vision" below).

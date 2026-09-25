@@ -1,11 +1,77 @@
 # Changelog
 
 All notable changes to Neptune. Format loosely follows
-[Keep a Changelog](https://keepachangelog.com/); this project has no release
-cadence, so entries are grouped by audit pass rather than version number.
+[Keep a Changelog](https://keepachangelog.com/); entries before 1.0.0
+are grouped by audit pass rather than version number.
 
 Bug numbers reference entries in [`docs/DEVLOG.md`](docs/DEVLOG.md), which
 explains each in full — symptom, root cause, fix, and what was learned.
+
+---
+
+## [1.0.0] — 2026-09-25
+
+The "look at everything" pass: every scan re-read for what it does when
+something goes wrong, the pipeline made fail-closed, tests pointed at the code
+that ships, and CI extended to the platform it ships on. Bugs 13–18 in the
+DEVLOG.
+
+### Fixed
+- **The silent all-clear, again (Bug 13).** macOS awk aborts on half a UTF-8
+  character; the scoring awk ran with `2>/dev/null`, so an abort produced an
+  empty findings list, which scored HEALTHY. Every script now runs under
+  `LC_ALL=C`, the scorer proves it finished (a stats line written in `END`),
+  lost or malformed records fail the report's integrity check, and a missing,
+  crashed or silent scan becomes an `unknown` finding.
+- **`--acknowledge N` resolved against a fresh scan (Bug 14)**, so N could be a
+  different finding from the one you read. It now resolves against the saved
+  listing of the run you read, shows what it resolved to, and asks.
+- **Two checks that could never fire (Bug 15):** the Chrome extension walk
+  stopped one directory short of every manifest; `--load` downloaded from a
+  retired host and reported "no bufferbloat" from a test that never loaded.
+- **Ad-hoc signatures passed as "signed" (Bug 16).** Now a class of its own.
+- **One problem, several findings (Bug 17).** Suite mode, per-binary de-duplication.
+- **A bloat score frozen at 100 (Bug 18):** `audit_system.sh` recorded nothing;
+  its kext check would have counted `kextstat`'s header as a kext.
+- `sentry.sh` re-sorts both sides before `comm`, so a baseline written under the
+  old locale cannot produce phantom NEW lines.
+- The `towc` DEVLOG entry (12b) corrected: it was an abort, not a warning.
+
+### Added
+- **Check ids and pass records.** Every check records a stable id, and a `pass`
+  when clean — the report shows what was covered, not only what failed. Record
+  format v2: `severity|category|scan|check|title` (v1 still replays).
+- **Posture panel** at the top of the HTML report: ten controls, each passed,
+  failed, warn, could-not-check or acknowledged.
+- **`clean_caches.sh`** — cache inventory; `--apply` clears only caches you pick
+  by number, after you type `yes`. Never Apple's, iCloud's or Homebrew's, never
+  through a symlink, never as root. Blast-radius tested.
+- **`check_updates.sh`**: minor updates and major upgrades reported separately;
+  `--upgrade` installs by label and never the major upgrade; every network call
+  has a timeout; brew runs with analytics off; results recorded with check ids.
+- **Exit code 77** when administrator privileges are refused; `--out DIR`
+  applies to every report the suite writes.
+- `netcheck_plus.sh`: marks randomized (private) MACs in the LAN census; a
+  brand-neutral router checklist.
+- Vendor label for Homebrew services (ad-hoc signed by design).
+- `docs/ARCHITECTURE.md`.
+
+### Changed
+- The renderer is a python module (`neptune_render.py`) with its remediation
+  table keyed by check id; `unknown` results get could-not-check advice rather
+  than the advice for a failure; `--sanitize` also scrubs acknowledge keys.
+- Uninstaller word boundaries are ASCII-only: `Mail` no longer matches `Mailé`.
+- Python floor stated and enforced as 3.6.
+
+### Tests and CI
+- `tests/unit.sh` sources the shipping scripts (`NEPTUNE_LIB=1`) instead of
+  carrying transcriptions of them; `tests/test_render.py` imports the renderer;
+  `tests/macos.sh` proves the platform assumptions on a real Mac.
+- CI: a macOS job running every suite under `/bin/bash` 3.2 and BWK awk plus a
+  real end-to-end run checked by `tests/e2e_assert.py`; actionlint; every action
+  pinned to a commit SHA; read-only default token; Dependabot for the pins.
+- Releases: built in CI from the tag, with `SHA256SUMS` and a signed
+  build-provenance attestation (`gh attestation verify`).
 
 ---
 

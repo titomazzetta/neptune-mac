@@ -870,13 +870,196 @@ close that gap earlier, which is what the two new gates are for.
 
 ---
 
+### Correction to 12b — it was not a warning
+
+12b above calls the `towc` message "noise during a normal scan". That was an
+understatement, and a probe on the target machine shows by how much:
+
+```
+$ awk 'BEGIN { print "before"; s = substr("x—y", 1, 2); sub(/q/, "r", s); print "after" }'
+before
+awk: towc: multibyte conversion failure on: '?'
+$ echo $?
+2
+```
+
+No "after". macOS awk does not warn and carry on — it **aborts the whole
+program** the moment a string function touches invalid UTF-8 in a UTF-8
+locale. The whole-word key builder removed the one place Neptune *created* such
+a string, which is why the test went quiet. It did nothing about the places
+where such strings *arrive* — which is Bug 13.
+
+---
+
+## The v1.0 pass — "look at everything"
+
+A full read of every scan and every path from a scan's `printf` to the verdict,
+asking one question of each: *what does this do when something goes wrong?*
+Six defects, and the first one is the reason this project exists.
+
+## Bug 13 — the silent all-clear, again
+
+**Symptom (constructed from the probe above, on the target awk).** Give the suite one process
+whose name contains a non-ASCII character near `lsof`'s 9-byte `COMMAND`
+cutoff — `Café Helper` is enough — and the report can read **HEALTHY** with
+zero findings.
+
+**Cause.** Three facts, each harmless alone:
+
+1. `lsof` truncates command names by **bytes**, so a name can be cut in the
+   middle of a character. Half a character is a normal input.
+2. macOS awk aborts on it (above).
+3. The scoring step ran as `awk '...' "$FINDINGS" 2>/dev/null | ... > scored`.
+
+So the awk that turned records into scores died on the first bad byte, its
+error went to `/dev/null`, the pipeline carried on with whatever it had written
+— possibly nothing — and **an empty findings list scored 100/100 across the
+board**. The runner had the same shape one level up: a missing scan printed
+"(skipping …)" and contributed nothing, and a scan that crashed half-way
+contributed half. Nothing anywhere distinguished "found nothing" from "could not
+look". That is Bug 1's failure — the false all-clear — reached by a completely
+different road.
+
+**Fix, in layers, because any one of them alone would be a hope:**
+
+- **Every script runs under `LC_ALL=C`.** In the C locale text is bytes; awk has
+  nothing to convert and nothing to abort on, BSD `sed`/`tr` stop throwing
+  "illegal byte sequence", and `length()`/`substr()` mean the same thing on the
+  Mac and on the Linux CI runner. The bytes pass through untouched, so the
+  terminal still shows em-dashes.
+- **The scorer proves it finished.** It writes a stats line — lines read,
+  valid, malformed, duplicates, written — *in awk's `END` block*. If awk dies,
+  there is no stats line. If the numbers do not add up, or there were zero
+  records, integrity is off, the verdict reads **INCOMPLETE — this is NOT a clean
+  bill of health**, and the exit code is 2.
+- **Malformed records become a finding** ("3 result lines could not be read"),
+  never a silent drop.
+- **The runner fails closed.** A scan that is missing, exits non-zero
+  (`PIPESTATUS`, since it runs through `tee`), or finishes having recorded
+  nothing becomes an `unknown` finding naming it.
+- **Every check records a `pass`.** So a report can say *what it covered*, and a
+  CI job can assert that a real run on real macOS checked every posture control.
+
+**Test.** `tests/unit.sh` feeds the real pipeline a title containing half an
+em-dash and asserts both records survive with nothing on stderr; feeds it
+nothing and asserts *incomplete*/exit 2; feeds it garbage and asserts an unknown.
+`tests/macos.sh` re-runs the abort probe on the CI Mac so the reason for the
+rule is re-proven on every build.
+
+**Lesson.** `2>/dev/null` on a step whose *output is the verdict* is not error
+handling; it is deciding in advance that errors mean "all clear". Suppress
+stderr on probes whose failure you handle; never on the thing that decides.
+
+## Bug 14 — `--acknowledge 5` acknowledged a different finding than the one you read
+
+**Cause.** `--acknowledge` ran **a fresh full scan** and resolved `5` against
+*that* run's numbering. Findings come and go between runs — a process exits, an
+update lands — so item 5 of the list on your screen could be item 4 or 6 of the
+new one. It also wrote to the allowlist without showing what it had resolved
+the number to. Silencing the wrong alert, quietly, is the failure this whole
+project is about.
+
+**Fix.** The numbered list is written once per run to
+`~/.neptune/last-listing.tsv`, and the terminal, the HTML report and
+`--acknowledge` all read that file. Acknowledging no longer scans at all: it
+shows the findings the numbers resolve to, *from the run you read*, and asks.
+
+**Test.** A temporary `HOME` with a saved listing: item 2's key must be what
+lands in the allowlist; `99` exits 64; declining changes nothing.
+
+## Bug 15 — two checks that could never fire
+
+- **Browser extensions.** The Chrome check ran `find … -maxdepth 4` for
+  `manifest.json`. Manifests live at `<profile>/Extensions/<id>/<version>/`,
+  which is depth 5. The section of every report was a heading with nothing under
+  it — and "no risky extensions" is what that looked like. It is now a small
+  python parser (`neptune_inspect.py`) that walks every Chromium-family browser
+  and profile, resolves `__MSG_` names from `_locales`, and flags only the two
+  permissions that can see or reroute everything (`proxy`, `debugger`).
+- **Bufferbloat (`netcheck_plus.sh --load`).** It downloaded a test file from a
+  host that no longer serves it, with `curl -s` in the background and no check
+  on the result. The "load" never loaded anything, so the test compared idle
+  latency with idle latency and reported **no bufferbloat**. It now uses
+  Cloudflare's speed-test endpoint, records how many bytes arrived, and refuses
+  to report a result under 1 MB.
+
+Both are the same shape as Bug 13 at the scale of one check: a measurement that
+did not happen, reported as a measurement that came back clean.
+
+## Bug 16 — ad-hoc signed was scored as "signed"
+
+`sig()` asked `codesign -v` (valid?) and then took the first `Authority=` line.
+An **ad-hoc** signature — valid, but naming no one — has no `Authority` line, so
+it fell through as `signed:` with an empty signer, and passed.
+
+On Apple silicon every executable must carry at least an ad-hoc signature, and
+anyone can make one with `codesign -s -`. It proves the file has not changed
+since signing and nothing about who wrote it. Commodity Mac malware ships
+exactly like that, which makes this the one signing state a persistence audit
+most needs to see.
+
+**Fix.** Five classes: `apple`, `signed:<developer>`, `adhoc`, `unsigned`,
+`missing`. `Signature=adhoc`, or a valid signature with no authority at all, is
+`adhoc`, and ad-hoc persistence, helpers and listeners are findings. Homebrew's
+binaries are ad hoc too, so `homebrew.mxcl.*` gets a vendor label saying so —
+still found, still counted.
+
+**Test.** Both copies of `sig()` (sentry and redflag) against captured output
+for every class, and on macOS against a binary the CI job signs ad hoc itself.
+
+## Bug 17 — one problem, several findings
+
+The 2026-09-18 run lists Docker's root helper twice (as launchd persistence and
+as a privileged helper), the Waves licence server four times (a networked
+process, a launch agent, and two listener lines for `127.0.0.1` and `[::1]`),
+and the double NAT twice (from `sentry.sh` and from `network_check.sh`). Each
+copy deducted. Eleven "attention" items were really about five things.
+
+**Fix.** In the suite (`NEPTUNE_SUITE=1`), a check two scans can both do is done
+once, by the scan that owns it. Within `redflag_scan.sh`, a binary already
+flagged is not flagged again under another heading, and a listener's addresses
+are reported together. Exact duplicate records are dropped by the scorer and
+counted in its stats.
+
+## Bug 18 — a bloat score that could not move
+
+The sample report shows 3.5 GB of Homebrew downloads and another 4–5 GB of
+other caches, and a bloat score of **100/100**. `audit_system.sh` printed its
+disk listings but **recorded nothing**, so the category had no inputs. Its one
+would-be finding had its own bug: third-party kexts were found with
+`kextstat | grep -v com.apple`, which also lets `kextstat`'s column header
+through — recording that would have been a false finding on every Mac.
+
+**Fix.** Caches, Homebrew's cache, regenerable developer data and logs are
+measured with `du -sk` (integers in every locale; `du -h` prints `3,5G` under
+some) against stated thresholds and recorded — with the pass recorded too. Kexts
+are counted from data rows only. And `clean_caches.sh` exists, so a bloat
+finding has an answer that is not "delete things by hand".
+
+### What this pass changed about the tests
+
+Every earlier test of the pipeline tested a **transcription** of it: the scoring
+awk copied into `tests/unit.sh`, a remediation table extracted from between two
+marker comments and `exec()`'d. One transcription had drifted. Now the scripts
+keep their pure functions above a `NEPTUNE_LIB=1` guard, the tests source the
+shipping files and call them, and the renderer is a python module the tests
+import. And there is a macOS CI job that runs all of it under `/bin/bash` 3.2
+and BWK awk, then runs the real suite on the runner and checks what the report
+says about itself.
+
+---
+
 ## Cross-cutting practices that came out of these
 
-- **CI as a regression net for exactly these bugs.** The pipeline runs shellcheck,
-  `bash -n` syntax checks, a **bash-3.2-compatibility gate** (fails on
-  case-in-subshell, associative arrays, mapfile; flags unguarded empty-array
-  expansion), and a guard verifying the destructive scripts still contain their
-  confirmation prompts. The bugs I hit by hand can't silently come back.
+- **CI as a regression net for exactly these bugs.** Linux runs shellcheck,
+  `bash -n`, grep gates for the bash 3.2 traps, destructive-script guardrails,
+  and every test suite. A macOS job reruns the suites under `/bin/bash` 3.2 and
+  BWK awk and performs a real end-to-end run. The bugs found by hand can't
+  silently come back, and the ones that only exist on the target platform are
+  now tested on it.
+- **Fail closed, everywhere.** An unknown is never a pass; an error path never
+  falls through to "ok"; a step whose output is the verdict never has its
+  errors thrown away.
 - **Calibration over alarmism.** Legitimate vendor software (Waves, Sonarworks,
   Docker, PACE/iLok) fails code-signing checks routinely. Rather than flag-spam,
   Neptune labels these as expected quirks and teaches the user to spot what's
@@ -890,8 +1073,8 @@ close that gap earlier, which is what the two new gates are for.
 
 ## Where it's going
 
-See `ROADMAP.md`. The next step — structured `--json` output feeding an optional,
-decoupled AI advisor — is designed so a model can *recommend* fixes but never
-*execute* destructive commands unsupervised. Observe → decide → act, with the human
-kept at the act boundary. That's the same fail-safe instinct as everything above,
-applied to the AI layer.
+See `ROADMAP.md`. The next gap is login items registered through
+`SMAppService`, which live in the Background Task Management database rather
+than a `LaunchAgents` folder — and the rule for it is the one this log keeps
+relearning: capture real output from a real machine first, write the parser
+against the fixture second.

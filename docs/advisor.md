@@ -43,17 +43,32 @@ one or embed a cloud key. Until then, the paste loop above is the way.
 
 ```json
 {
+  "neptune": { "schema": 3, "version": "1.0.0", "sanitized": true },
   "verdict": "needs_attention",
-  "scores": { "security": 64, "network": 80, "bloat": 100, "maintenance": 95 },
-  "counts": { "attention": 2, "notice": 3, "unknown": 1, "acknowledged": 4 },
+  "integrity": { "ok": true, "problem": null },
+  "scores": { "security": 52, "network": 80, "bloat": 100, "maintenance": 95 },
+  "counts": { "attention": 11, "notice": 4, "unknown": 0, "info": 2, "pass": 15, "acknowledged": 0 },
+  "posture": [
+    { "check": "filevault", "label": "Disk encryption (FileVault)", "state": "pass", "detail": "..." }
+  ],
   "findings": [
-    { "severity": "attention", "category": "security", "scan": "redflag",
-      "title": "UNSIGNED privileged helper (runs as root): ...",
-      "key": "unsigned privileged helper (runs as root): ...",
-      "acknowledged": false }
-  ]
+    { "n": 5, "severity": "attention", "category": "security", "scan": "redflag",
+      "check": "persistence-launchd",
+      "title": "UNSIGNED persistence: com.docker.socket runs ...",
+      "vendor": { "name": "Docker", "note": "..." },
+      "advice": { "means": "...", "do": "...",
+                  "commands": [ { "command": "codesign -dvv ...", "kind": "look", "effect": "..." } ] } }
+  ],
+  "checks_passed": [ { "category": "security", "check": "sip", "title": "..." } ]
 }
 ```
+
+Schema 3 adds the `check` id on every record, the `posture` panel,
+`checks_passed` (what was verified, not just what failed) and `integrity`. A
+report whose `integrity.ok` is false lost results in the pipeline; say so to the
+model rather than letting it treat the list as complete. `--replay` accepts this
+file back and re-derives everything from the findings, ignoring the stored
+numbers.
 
 That is a better input to a model than the prose report: it is smaller, it has
 no formatting to misread, and `--sanitize` has already removed your hostname,
@@ -66,7 +81,8 @@ that route through Neptune's own confirmed paths**:
 
 > For each finding, tell me (a) what it most likely is, (b) whether it is a known
 > vendor quirk I should acknowledge, and (c) the action. For removals, give me
-> the `./uninstall.sh "<App Name>"` command rather than `rm` commands — I want
+> the `./uninstall.sh "App Name"` or `./clean_caches.sh --apply` command rather
+> than `rm` commands — I want
 > the discovery-and-confirmation step. Do not give me shell I would paste blind.
 
 This is deliberate, and it is the same boundary `docs/PHILOSOPHY.md` draws. A

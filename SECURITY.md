@@ -1,7 +1,7 @@
 # Security & data handling
 
 Neptune asks you to run shell scripts on your Mac, some of them with `sudo`, and
-two of them delete files as root. That is a lot of trust to ask for. This document
+three of them delete files — two as root, one (the cache cleaner) as you. That is a lot of trust to ask for. This document
 exists so you can grant it deliberately rather than hopefully.
 
 Read it before the first run. Everything here is verifiable from the source in
@@ -25,30 +25,34 @@ the scripts:
 | DNS lookups (`apple.com`, `example.org`, …) | your configured resolver | DNS timing |
 | ARP sweep of your own subnet | your LAN | `netcheck_plus.sh` device census |
 | HTTPS to `api.ipify.org` | third party | **only** with `network_check.sh --public-ip` |
-| HTTPS to a public 100MB test file | third party | **only** with `netcheck_plus.sh --load` |
+| HTTPS to `speed.cloudflare.com` (up to 100 MB, 8 s cap) | third party | **only** with `netcheck_plus.sh --load` |
 
 The last two are opt-in and off unless you pass the flag. Everything else is your
 own network and the same public DNS resolver your machine already uses.
 
 `check_updates.sh` invokes `softwareupdate`, `brew` and `mas` if installed. Those
 are Apple's and Homebrew's own tools making their own normal network requests —
-Neptune does not proxy, wrap, or inspect them.
+Neptune does not proxy, wrap, or inspect them. It does run every `brew` command
+with `HOMEBREW_NO_ANALYTICS=1`: Homebrew sends install analytics by default, and
+a tool whose premise is "no telemetry" should not cause any on your behalf.
 
 To confirm all of the above yourself:
 
 ```bash
-grep -rnE 'curl|wget|nc |ftp|https?://' scripts/
+grep -rnE '\bcurl\b|\bwget\b|https?://' scripts/
 ```
 
-That returns exactly three hits, and you should expect all three:
+That returns three places, and you should expect all three:
 
 - `network_check.sh` — the `api.ipify.org` lookup, inside `if $PUBLIC_IP`.
-- `netcheck_plus.sh` — the bufferbloat test file, inside `if $LOAD`.
-- `check_updates.sh` — **not a network call.** It is the Homebrew install
-  command printed as text, inside `note '...'` single quotes, shown to you when
-  `brew` is missing. Nothing executes it.
+- `netcheck_plus.sh` — the Cloudflare speed-test download (two lines, one
+  command), inside `if $LOAD`. It checks that the download actually happened
+  and discards the result if not, rather than reporting "no bufferbloat" from a
+  test that never loaded the link.
+- `check_updates.sh` — **not a network call.** It prints `https://brew.sh` as
+  text when Homebrew is missing. Nothing fetches it.
 
-If you ever get a fourth hit, something has changed that this document does not
+If you ever find a fourth, something has changed that this document does not
 describe.
 
 ---
@@ -68,9 +72,10 @@ the credential, and elevates only specific commands.
 | `audit_system.sh` | yes | `du` on `/Library`, `/private/var` |
 | `network_check.sh` | **no** | — |
 | `netcheck_plus.sh` | **no** | — |
-| `check_updates.sh` | only with `--upgrade` | installing updates |
+| `check_updates.sh` | only with `--upgrade` | installing updates, one label at a time |
 | `uninstall.sh` | yes, after confirmation | removing files outside `$HOME` |
 | `remove_mackeeper.sh` | yes, after confirmation | removing files outside `$HOME` |
+| `clean_caches.sh` | **never** | your caches are yours; it refuses to run as root |
 
 The read-only scans use root to *see more*, never to change anything.
 
@@ -98,6 +103,15 @@ you ask for it) structured findings:
 | `~/Desktop/neptune_report_*.html` | readable report with remediation | `neptune.sh --html` |
 | `~/.neptune/history.tsv` | one line per run: date, verdict, four scores, four counts | every `neptune.sh` run |
 | `~/.neptune/seen.tsv` | one line per finding: its key, first seen, last seen, run count | every `neptune.sh` run |
+| `~/.neptune/last-listing.tsv` | the numbered list from your last run | every `neptune.sh` run |
+
+`--out DIR` moves every report — including the ones `sentry.sh` and
+`redflag_scan.sh` write for themselves — to `DIR` instead of the Desktop.
+`--replay` writes no state at all.
+
+`last-listing.tsv` is what makes `--acknowledge 5` mean item 5 *of the list you
+read*, not item 5 of a fresh scan whose numbering may have shifted. It holds the
+same titles the report shows.
 
 `seen.tsv` holds the same kind of thing at finding granularity — the
 digit-collapsed key `--acknowledge` already uses, plus two dates and a counter —
@@ -170,8 +184,8 @@ refuses to run at all rather than redirect half of itself.
 ### Removing Neptune completely
 
 ```bash
-rm -rf ~/.sentry ~/.neptune           # the only state it keeps
-                                      # (allow, history.tsv, seen.tsv)
+rm -rf ~/.sentry ~/.neptune           # the only state it keeps (allow,
+                                      # history.tsv, seen.tsv, last-listing.tsv)
 rm -f ~/Desktop/neptune_full_report_*.txt \
       ~/Desktop/sentry_report_*.txt \
       ~/Desktop/redflag_report_*.txt \
@@ -191,26 +205,30 @@ Neptune is readable bash, on purpose. You are encouraged to check it rather than
 trust it.
 
 ```bash
-# 1. Read the two scripts that can delete things. They are the only ones that
-#    matter for safety, and both are under 300 lines.
+# 1. Read the three scripts that can delete things. They are the only ones
+#    that matter for safety.
 less scripts/uninstall.sh
 less scripts/remove_mackeeper.sh
+less scripts/clean_caches.sh
 
 # 2. Find every rm in the project.
 grep -n 'rm -rf' scripts/*.sh
 ```
 
-Three files match, and the third is not what it looks like:
+Four files match, and the fourth is not what it looks like:
 
 - `uninstall.sh`, `remove_mackeeper.sh` — the real deletions, both behind the
-  confirmation gate.
+  confirmation gate. (One `uninstall.sh` hit is a comment.)
+- `clean_caches.sh` — empties the cache folders you picked by number, after you
+  typed `yes`; it re-checks each one is a real folder, not a symlink, at the
+  moment of deletion.
 - `neptune.sh` — `rm -rf "$TMP"` in an `EXIT` trap, removing the `mktemp -d`
   scratch directory it created for itself. It never touches your files.
 
 ```bash
 # 3. Confirm the confirmation prompts exist and no flag can skip them.
-grep -n 'y/N' scripts/*.sh
-grep -rnE '\-\-force|\-\-yes' scripts/          # expect: no output
+grep -nE 'read -r?.*(y/N|yes)' scripts/*.sh
+grep -nE '^\s*--?(yes|force)\)' scripts/*.sh     # expect: no output (no flag parses)
 
 # 4. Confirm nothing phones home (see the table above for the three expected hits).
 grep -rnE 'curl|wget|https?://' scripts/
@@ -235,14 +253,21 @@ you can read what you are about to run.
 
 ## The destructive scripts
 
-`uninstall.sh` and `remove_mackeeper.sh` are the only scripts that delete
-anything. Both follow the same shape:
+`uninstall.sh`, `remove_mackeeper.sh` and `clean_caches.sh` are the only scripts
+that delete anything. All three follow the same shape:
 
 1. **Discover** — find every related file, read-only.
 2. **Show** — print the complete list, with sizes, before anything happens.
-3. **Confirm** — require a typed `y`. Anything else aborts.
+3. **Confirm** — require a typed answer (`y` for the uninstallers, the whole
+   word `yes` for the cache cleaner). Anything else aborts.
 4. **Act** — delete only what was displayed.
 5. **Verify** — re-scan and report what remains.
+
+`clean_caches.sh` is deliberately narrow: only the *contents* of folders
+directly inside `~/Library/Caches`, only ones you pick by number, never Apple's
+own caches, iCloud state or Homebrew's (which `brew cleanup` owns), never a
+symlink, never as root. A selection it cannot parse exactly — `9` when there
+are eight items, `2-x` — is refused whole rather than guessed at.
 
 Deliberate design decisions:
 
@@ -256,6 +281,13 @@ Deliberate design decisions:
   the meantime. (This was not always true; see `docs/DEVLOG.md`.)
 - **Search terms are matched literally, not as regular expressions**, and terms
   under three characters skip the process scan entirely.
+- **Word boundaries are ASCII punctuation only.** `./uninstall.sh Mail` matches
+  `Mail` and `com.apple.mail.plist`, never `MailMate` — and never `Mailé`
+  either: a non-ASCII letter continues a word rather than ending it.
+
+All three are exercised by `tests/blast_radius.sh` on every CI run, against a
+fake filesystem full of decoys, including a "cache" that is really a symlink
+into `~/Documents`.
 
 If you abort at the prompt, nothing on your system has been changed.
 
@@ -289,8 +321,32 @@ Coverage gaps that are known and specific:
   elevate and do cover root-owned daemons.
 - Spotlight-based staleness detection misses apps launched via helpers or excluded
   from indexing. Those are listed separately and explicitly marked unreliable.
-- The system-proxy check is correct on the evidence available but has not been
-  verified against a machine with a proxy actively configured. See `ROADMAP.md`.
+- The system-proxy check is tested against a captured configured-proxy
+  fixture, but has not been run on a machine with a proxy actively configured.
+- Login items registered through Apple's newer `SMAppService` API live in the
+  Background Task Management database, not in a `LaunchAgents` folder, and are
+  not yet enumerated. They still show up as running processes and listeners.
+  This is the next item in `ROADMAP.md`.
+
+---
+
+## Verifying a release
+
+Releases are built by GitHub Actions from the tagged commit, never on a
+laptop. Each one ships a `SHA256SUMS` file and a signed build-provenance
+attestation that ties the tarball to the exact workflow run and commit that
+produced it:
+
+```bash
+shasum -a 256 -c SHA256SUMS
+gh attestation verify neptune-mac-v1.0.0.tar.gz --repo titomazzetta/neptune-mac
+```
+
+The CI that builds them runs with a read-only token by default, pins every
+action to a full commit SHA (a tag can be moved; a SHA cannot), never persists
+credentials into the checkout, and grants write access only to the one release
+job that needs it. Dependabot keeps the pins current. See
+`.github/workflows/`.
 
 ---
 

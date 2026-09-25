@@ -9,59 +9,35 @@ is in [`docs/DEVLOG.md`](docs/DEVLOG.md).
 
 ## Now
 
-### 1. Fixture tests for the parsing layer
-Unit-test the pure text-processing functions against captured command output. No
-macOS required, and no mocking of `launchctl` / `lsof` / `system_profiler` — that
-framing is what kept this deferred as "non-trivial", and it skips the cheap half.
+### 1. Login items from Background Task Management
+Since macOS 13, apps can register login items and helpers through
+`SMAppService`, and those live in the Background Task Management database rather
+than in a `LaunchAgents` folder. They still appear as running processes and
+listeners, but not in the persistence audit — a real gap, stated in
+`SECURITY.md`. `sfltool dumpbtm` (root) prints the database; the work is a
+parser plus fixture tests, which needs a real capture from a machine with a few
+such items (a sanitized `sudo sfltool dumpbtm` from the development Mac), not a
+guess at the format. Each item then goes through the same `sig()` as every other
+persistence target.
 
-Every bug in the 2026-09 audit lived in this layer and would have been caught here:
-
-- digest extraction from scan text (Bug 8)
-- `sig()`'s authority classification, given captured `codesign -dvv` output (Bug 7)
-- the ephemeral-port collapse, given captured `lsof` output
-- the double-NAT / CGNAT hop classifier, given a traceroute fixture (Bug 5's
-  logic, currently protected by nothing)
-- MAC extraction from `arp -an`, including the non-zero-padded form
-- the JSON encoder's escaping and `--sanitize`
-
-Structured findings make the assertions trivial: feed records in, assert on
-scores, counts and verdict.
-
-**One honest gap this closes:** the system-proxy check is correct on the evidence
-available, but nobody has run it against a machine with a proxy actually
-configured. A fixture settles that permanently.
-
-### 2. Per-check coverage accounting
-`unknown` findings surface checks that could not run, but the summary still can't
-say how many checks *ran*. Target:
-
-```
-27 checks · 24 clean · 2 attention · 1 could not run
-```
-
-That requires each scan to count its checks, not just its findings. Completes the
-idea the firewall fix started: "no red flags" must mean "every check ran and found
-nothing", never "the checks that ran found nothing".
+### 2. A demo recording
+An asciinema cast, scrubbed, and a GIF rendered from it. The procedure is in
+[`docs/demo/RECORDING.md`](docs/demo/RECORDING.md); it needs live system state,
+so it is recorded by hand rather than in CI.
 
 ## Next
 
 ### 3. Per-scan `--json`
-`neptune.sh --json` works. The individual scans can already record findings, so
-letting each emit its own JSON standalone is mostly plumbing — useful for anyone
-scripting against one scan rather than the suite.
+Each scan already records structured findings; letting one emit JSON standalone
+is mostly plumbing — useful for scripting against one scan rather than the suite.
 
 ### 4. Config beyond the allowlist
-`~/.neptune/allow` exists. A `~/.neptune/config` could hold staleness threshold
-and report location. Same rule as the allowlist: config may never silently
-disable a check. An acknowledged finding is still counted and still listed.
+A `~/.neptune/config` could hold the staleness threshold and report location.
+Same rule as the allowlist: config may never silently disable a check.
 
-### 5. Portfolio polish
-- ~~Sanitized sample report~~ — done: [`docs/sample-report.txt`](docs/sample-report.txt)
-  (regenerate it against current output; the committed one is a pre-fix exhibit).
-- ~~Keep `docs/DEVLOG.md` current~~ — ongoing, current through Bug 8.
-- **Demo recording** — an asciinema cast plus a GIF generated from it. Scaffolding
-  and scrub instructions are in the README's Demo section; the recording needs
-  live system state.
+### 5. Notarization status for apps
+`spctl --assess` distinguishes notarized from merely signed. Cheap to add to the
+stale-apps and unmanaged-apps listings, and a meaningful extra signal.
 
 ## Not planned
 
@@ -82,25 +58,19 @@ Removed deliberately, so they stop reading as debt:
 
 ## Done
 
-- Master runner with a consolidated report
-- Guided uninstaller with discovery / confirm / verify
-- Deep network check (`netcheck_plus.sh`)
-- bash 3.2 compatibility fixes (empty-array guards, awk-not-case-in-subshell)
-- `lsof` per-process AND-semantics fix; subshell flag-propagation fix
+**v1.0.0 — 2026-09** (full list in [`CHANGELOG.md`](CHANGELOG.md)):
 
-**2026-09 audit pass** — full list in [`CHANGELOG.md`](CHANGELOG.md):
+- Fail-closed pipeline: integrity check, crashed/missing/silent scans become
+  unknowns, an error can never read as healthy (Bug 13)
+- Every check records a stable id and a `pass` when clean — the report proves
+  coverage, and the HTML opens with a ten-control posture panel
+- Ad-hoc signatures classified as their own class (Bug 16)
+- `--acknowledge N` resolves against the saved listing you read (Bug 14)
+- Suite-mode de-duplication (Bug 17); a bloat score that can move (Bug 18)
+- `clean_caches.sh`; `check_updates.sh` that never installs a major upgrade
+- Tests that source the shipping code; a macOS CI job under bash 3.2 with a
+  real end-to-end run; pinned, least-privilege CI; attested releases
 
-- Code-signing authority read at the wrong verbosity, so no signer was ever
-  identified and the Apple-detection branch was unreachable (Bug 7)
-- Action digest double-counted findings and promoted explanatory prose to
-  findings (Bug 8)
-- `uninstall.sh` no longer terminates processes before the confirmation prompt
-- Ephemeral listener-port churn suppressed in the baseline
-- A security check that cannot run now says so instead of passing quietly
-- Public-IP lookup made opt-in; `SECURITY.md` added
-
-**2026-09 verdict layer:**
-
-- Structured finding records; verdict and per-category health scores
-- `--acknowledge` with a keyed allowlist in `~/.neptune/allow`
-- `--json` and `--json --sanitize`
+**Earlier:** the verdict layer, scores and `--json`/`--html`; the 2026-09 audit
+pass (Bugs 1–12); blast-radius testing of the destructive scripts; the master
+runner, guided uninstaller and deep network check.

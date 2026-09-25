@@ -27,7 +27,7 @@ alarmist, portable over clever. See `docs/PHILOSOPHY.md` for the full vision.
 
 A collection of independent, on-demand bash scripts that audit and clean a Mac.
 No daemons, nothing resident, nothing scheduled. Every script runs only when
-invoked and (with two exceptions) changes nothing. The design philosophy is the
+invoked and (with three exceptions, each confirmed) changes nothing. The design philosophy is the
 opposite of the "cleaner" apps it was built to remove: transparent, modular,
 read-only by default, human-in-the-loop for anything destructive.
 
@@ -35,6 +35,13 @@ read-only by default, human-in-the-loop for anything destructive.
 
 These are hard rules. Breaking any of them is a regression, even if the code
 "works" on your test machine.
+
+0. **Every script runs under `export LC_ALL=C`.** macOS awk (BWK 20200816)
+   ABORTS the whole program when a string function meets invalid UTF-8 in a
+   UTF-8 locale, and `lsof` truncates names by bytes, so half a character is a
+   normal input. In the C locale all text is bytes — nothing aborts and awk
+   behaves the same on macOS and Linux (DEVLOG Bug 13). A new script sets it on
+   the line after `set -u`; `tests/unit.sh` fails if one does not.
 
 1. **macOS ships bash 3.2 (2007).** This is the single most important constraint.
    Modern bash idioms silently break on it. Specifically:
@@ -57,9 +64,11 @@ These are hard rules. Breaking any of them is a regression, even if the code
    The CI runs shellcheck with `--shell=bash` and these bugs have bitten this
    project repeatedly. When in doubt, prefer POSIX-portable constructs.
 
-2. **Read-only is the default.** Only `remove_mackeeper.sh` and `uninstall.sh`
-   delete anything, and both MUST show the user everything first and require an
-   explicit typed confirmation before any destructive action. Never add silent
+2. **Read-only is the default.** Only `remove_mackeeper.sh`, `uninstall.sh` and
+   `clean_caches.sh` delete anything, and each MUST show the user everything
+   first and require an explicit typed confirmation before any destructive
+   action. (`clean_caches.sh` never elevates: it only empties folders inside the
+   user's own `~/Library/Caches` that they picked by number.) Never add silent
    deletion to any script. Never add a `--force`/`--yes` flag that skips the
    confirmation on a destructive script without extremely clear justification.
 
@@ -79,10 +88,12 @@ These are hard rules. Breaking any of them is a regression, even if the code
 ## Repository layout
 
 ```
-scripts/         the nine Neptune scripts (the actual tool)
-tests/           shellcheck config + syntax smoke tests
+scripts/         the ten Neptune scripts, the renderer (neptune_render.py), the
+                 extension inspector (neptune_inspect.py), vendor-quirks.tsv
+tests/           lint.sh (runs everything), unit.sh, test_render.py,
+                 blast_radius.sh, macos.sh, e2e_assert.py, fixtures/
 docs/            extended docs, the report-reading guide, the AI-advisor prompt
-.github/workflows/  CI (lint, syntax, bash 3.2 compat gate)
+.github/workflows/  ci.yml (Linux, workflow lint, macOS + real run), release.yml
 README.md        public overview
 ROADMAP.md       what's next — pick tasks from here
 CLAUDE.md        this file
@@ -92,13 +103,14 @@ CLAUDE.md        this file
 
 | Script | Role | Mutates? |
 |---|---|---|
-| `neptune.sh` | Master runner — verdict, scores, `--json`, `--html`, one combined report | `~/.neptune/allow` with `--acknowledge`; appends `~/.neptune/history.tsv` every run |
+| `neptune.sh` | Master runner — verdict, scores, `--json`, `--html`, `--replay`, one combined report | `~/.neptune/allow` with `--acknowledge`; `history.tsv`, `seen.tsv`, `last-listing.tsv` every run; nothing with `--replay` |
 | `sentry.sh` | Baseline diff, process→network map, staleness | baseline files only |
 | `redflag_scan.sh` | Deep audit: persistence, listeners, interception | no |
 | `audit_system.sh` | Resources, persistence, disk | no |
 | `network_check.sh` | NAT, DNS, latency, connections | no |
-| `netcheck_plus.sh` | Deep network: Wi-Fi quality, LAN census, ASUS audit | no |
-| `check_updates.sh` | macOS + brew + App Store updates | only with `--upgrade` |
+| `netcheck_plus.sh` | Deep network: Wi-Fi quality, LAN census, router checklist (standalone, not in the suite) | no |
+| `check_updates.sh` | macOS + brew + App Store updates | only with `--upgrade`, asking per source; never a major upgrade |
+| `clean_caches.sh` | Cache inventory; empties the ones you pick | YES — `--apply`, pick, type `yes`; never as root |
 | `uninstall.sh` | Guided app removal | YES — confirmed; nothing with `--dry-run` |
 | `remove_mackeeper.sh` | Targeted MacKeeper/Clario removal | YES — confirmed; nothing with `--dry-run` |
 
@@ -109,25 +121,37 @@ CLAUDE.md        this file
 - **Match the existing style.** Colour helpers (`ok`/`warn`/`flag`/`unknown`),
   section headers, and the `[ok]/[!!]/[FLAG]/[XX]` prefixes are consistent across
   scripts — keep them.
-- **One renderer, one remediation table.** `--json` and `--html` come out of a
-  single python block in `neptune.sh`. The remediation table inside it is the
-  only place that says "here is what to do about X"; do not add a second copy
-  for a new output format. Its rules: no generated commands, no pipelines or
-  chains, every command labelled `look`/`setting`/`software`/`neptune`, and an
-  honest "no automated suggestion" where none exists. `tests/unit.sh` asserts
-  all of that against the real table, extracted from this file rather than
-  re-implemented.
-- **Findings are recorded, not scraped.** Each scan's `flag`/`warn`/`unknown`
-  helper also calls `record <severity> "<title>"`, which appends
-  `severity|category|scan|title` to `$NEPTUNE_FINDINGS` when the master runner
-  sets it. Set `CATEGORY` at the top of each section. If you add a helper that
-  prints a finding, make it record one too — a finding that prints but does not
-  record is invisible to the score and the JSON.
+- **One renderer, one remediation table.** `--json` and `--html` come out of
+  `scripts/neptune_render.py`, and its `REMEDIATION` table — keyed by check id —
+  is the only place that says "here is what to do about X". Its rules: no
+  generated commands, no pipelines or chains, every command labelled
+  `look`/`setting`/`software`/`neptune`, and an honest "no automated suggestion"
+  where none exists. An `unknown` gets could-not-check advice, never the fix for
+  a failure. `tests/test_render.py` imports the module and asserts all of it,
+  including that every `CHECK=` id in the scans has an entry.
+- **Findings are recorded, not scraped.** Each check sets `CHECK=<stable-id>`
+  and reports through a helper that prints AND calls `record`, appending
+  `severity|category|scan|check|title` to `$NEPTUNE_FINDINGS`:
+  `flag`/`bad` → attention, `warn`/`upd` → notice, `unknown` → unknown,
+  `info` → info (about the run; costs nothing), `pass` → pass (the check ran
+  clean — this is what lets the report prove coverage). A finding that prints
+  but does not record is invisible to the score, the JSON and the HTML.
+- **Fail closed.** A check that cannot decide records `unknown`, never falls
+  through to "ok". The runner turns a crashed, missing or silent scan into an
+  `unknown` record, and `nep_run_pipeline` turns lost records into an integrity
+  failure. Nothing in that chain may be weakened to make a run "look" healthier.
+- **Suite mode.** `neptune.sh` exports `NEPTUNE_SUITE=1`; a check two scans can
+  both do (double NAT, the persistence listing, listeners) is done once, by the
+  owning scan. One problem, one finding.
+- **Testable seams.** Pure functions go above the `NEPTUNE_LIB` guard in each
+  script, with no side effects at source time; `tests/unit.sh` sources the
+  shipping scripts and calls them. Never test a transcription of shipped code.
 - **Never widen a destructive glob without tracing it.** The `rm -rf` targets in
   the uninstallers are built from discovery output; a careless glob is how you
   delete someone's home folder. Show, confirm, then delete. A search term must
-  match as a WHOLE WORD — bounded by a non-alphanumeric character or the
+  match as a WHOLE WORD — bounded by an ASCII non-alphanumeric byte or the
   start/end of the filename — because `-iname "*Mail*"` also matches MailMate.
+  Bytes above 0x7F are word characters, so `Mail` never matches `Mailé`.
   Any change to discovery has to keep `tests/blast_radius.sh` green, and if you
   add a new search location, add a decoy for it to that harness in the same
   commit. The harness is the only thing standing between this script and
@@ -142,14 +166,11 @@ CLAUDE.md        this file
 
 ## Current priorities
 
-See `ROADMAP.md`. The verdict layer, category scores, `--json` and the
-acknowledge list have shipped — the findings model they rest on is the thing to
-understand before changing any scan: scans emit `severity|category|scan|title`
-records and every summary renders from those. Do not add a code path that
-re-derives findings by parsing printed output; that is DEVLOG Bug 8.
+See `ROADMAP.md`. v1.0.0 shipped the fail-closed pipeline, check ids and pass
+records, the posture panel, ad-hoc signing as its own class, the cache cleaner,
+and tests that source the shipping code on macOS under bash 3.2.
 
-Next is **fixture tests for the parsing layer**. Every bug in the 2026-09 audit
-was findable from captured `codesign` / `lsof` / scan-output strings with no
-macOS involved, and the structured findings make assertions trivial. The
-orchestrator, the local-model advisor and a Windows sibling are explicitly NOT
-planned — see `ROADMAP.md`.
+Next is **login items from Background Task Management** (`sfltool dumpbtm`) —
+which needs a real captured fixture before any parser is written. The
+orchestrator, a bundled model advisor and a Windows sibling are explicitly NOT
+planned.

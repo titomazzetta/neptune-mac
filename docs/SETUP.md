@@ -8,10 +8,17 @@ development, so nobody has to rediscover them.
 ```bash
 git clone https://github.com/titomazzetta/neptune-mac.git
 cd neptune-mac/scripts
-chmod +x *.sh
-xattr -d com.apple.quarantine *.sh 2>/dev/null   # only if macOS quarantines them
-
 ./neptune.sh          # full read-only suite → one report on your Desktop
+./neptune.sh --html   # ...plus the readable report (needs the Command Line Tools)
+```
+
+Downloaded a release tarball instead of cloning? Verify it first, then clear
+the quarantine flag the browser added:
+
+```bash
+shasum -a 256 -c SHA256SUMS
+gh attestation verify neptune-mac-v1.0.0.tar.gz --repo titomazzetta/neptune-mac
+xattr -dr com.apple.quarantine neptune-mac-v1.0.0
 ```
 
 Never run these with `sudo`. They prompt for elevation only where needed and
@@ -23,7 +30,11 @@ refuse to run as root on purpose.
 git clone git@github.com:titomazzetta/neptune-mac.git   # SSH
 # or: git clone https://github.com/titomazzetta/neptune-mac.git   # HTTPS
 cd neptune-mac
-./tests/lint.sh       # mirrors CI: shellcheck + syntax + bash 3.2 gate
+./tests/lint.sh       # mirrors CI: syntax, shellcheck, bash 3.2 gates, guardrails,
+                      # python tests, blast radius, unit tests
+./tests/macos.sh      # on a Mac: the platform assumptions (bash 3.2, BWK awk, codesign)
+./scripts/neptune.sh --replay tests/fixtures/findings-2026-09-18.txt --html --out /tmp/np
+                      # render a real run without scanning anything
 ```
 
 Read `CLAUDE.md` (rules), `docs/PHILOSOPHY.md` (vision), and `docs/DEVLOG.md`
@@ -60,10 +71,20 @@ These tripped up the initial setup; documented so they don't again.
 
 ## CI
 
-Every push to `main` (and every PR) runs `.github/workflows/ci.yml`:
-shellcheck (`--severity=warning`), `bash -n` syntax checks, a bash-3.2
-compatibility gate, and a guard that the destructive scripts still contain their
-confirmation prompts. Get it green locally with `./tests/lint.sh` before pushing.
+Every push to `main` and every PR runs `.github/workflows/ci.yml`:
+
+- **Linux:** `tests/lint.sh` — everything above.
+- **Workflows:** actionlint, and a gate that every action is pinned to a commit SHA.
+- **macOS:** the unit, blast-radius and renderer suites under `/bin/bash` 3.2 and
+  BWK awk, `tests/macos.sh`, and a real end-to-end `neptune.sh --html --json
+  --sanitize` run on the runner, checked by `tests/e2e_assert.py`. The sanitized
+  report is uploaded as a build artifact.
+
+Tagging `vX.Y.Z` runs `.github/workflows/release.yml`: the tests again, then a
+tarball, `SHA256SUMS`, a signed build-provenance attestation, and the GitHub
+release. The tag must match `NEPTUNE_VERSION` and have a `CHANGELOG.md` section.
+
+Get it green locally with `./tests/lint.sh` before pushing.
 
 ## Auth is never committed
 
