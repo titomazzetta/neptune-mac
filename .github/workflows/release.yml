@@ -1,0 +1,85 @@
+name: Release
+
+# Tag vX.Y.Z -> run the tests, build a source tarball, publish SHA256SUMS and a
+# signed build-provenance attestation, then create the GitHub release.
+#
+# Verify a download:
+#   shasum -a 256 -c SHA256SUMS
+#   gh attestation verify neptune-mac-vX.Y.Z.tar.gz --repo titomazzetta/neptune-mac
+
+on:
+  push:
+    tags: [ 'v*' ]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: sudo apt-get update -q && sudo apt-get install -y -q shellcheck
+      - run: ./tests/lint.sh
+
+  test-macos:
+    # The Linux job cannot prove bash 3.2 / BWK awk behaviour; a release must
+    # not skip the job that can.
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: /bin/bash tests/macos.sh
+      - run: /bin/bash tests/unit.sh
+      - run: /bin/bash tests/blast_radius.sh
+      - run: python3 tests/test_render.py
+
+  release:
+    needs: [test, test-macos]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write         # create the release
+      id-token: write         # sign the attestation (Sigstore, via OIDC)
+      attestations: write     # store it
+      artifact-metadata: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Version in the tag matches the version in the code
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          CODE=$(sed -n 's/^NEPTUNE_VERSION="\(.*\)"/\1/p' scripts/neptune.sh)
+          [ "v$CODE" = "$TAG" ] || { echo "tag $TAG but neptune.sh says $CODE"; exit 1; }
+          grep -q "^## \[$CODE\]" CHANGELOG.md || { echo "CHANGELOG has no $CODE section"; exit 1; }
+
+      - name: Build tarball and checksums
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          mkdir dist
+          git archive --format=tar.gz --prefix="neptune-mac-$TAG/" -o "dist/neptune-mac-$TAG.tar.gz" HEAD
+          (cd dist && sha256sum "neptune-mac-$TAG.tar.gz" > SHA256SUMS && cat SHA256SUMS)
+          awk -v v="${TAG#v}" '$0 ~ "^## \\[" v "\\]" {p=1; next} /^## / {p=0} p' CHANGELOG.md > dist/NOTES.md
+
+      - name: Attest build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/neptune-mac-${{ github.ref_name }}.tar.gz
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Neptune $TAG" \
+            --notes-file dist/NOTES.md --verify-tag \
+            "dist/neptune-mac-$TAG.tar.gz" dist/SHA256SUMS
