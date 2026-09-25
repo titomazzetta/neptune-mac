@@ -10,3 +10,4 @@ redflag_report_*.txt
 # synced checkout and broke tests/lint.sh, which globs scripts/*.sh.
 * [0-9].*
 *.patch
+scripts/__pycache__/
