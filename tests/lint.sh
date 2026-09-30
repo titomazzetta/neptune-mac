@@ -51,11 +51,11 @@ if command -v python3 >/dev/null; then
     python3 -c 'import ast, sys; ast.parse(open(sys.argv[1], encoding="utf-8").read(), sys.argv[1])' "$f" \
       && echo "  ok  $f" || { echo "FAIL $f"; fail=1; }
   done
-  if python3 tests/test_render.py > /tmp/neptune_py.log 2>&1; then
+  if python3 -m unittest discover -s tests -p 'test_*.py' > /tmp/neptune_py.log 2>&1; then
     echo "  ok  $(grep -E '^Ran ' /tmp/neptune_py.log)"
   else
     grep -E '^(FAIL|ERROR):' /tmp/neptune_py.log
-    echo "ERROR python tests failed — run python3 tests/test_render.py for detail"; fail=1
+    echo "ERROR python tests failed — run python3 -m unittest discover -s tests -v for detail"; fail=1
   fi
   rm -f /tmp/neptune_py.log
 else
