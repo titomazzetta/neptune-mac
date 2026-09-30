@@ -89,7 +89,10 @@ sig() {
   case "$INFO" in *"Signature=adhoc"*) echo "adhoc"; return ;; esac
   AUTH=$(printf '%s\n' "$INFO" | grep -m1 '^Authority=' | cut -d= -f2)
   case "$AUTH" in
-    "Software Signing"|"Apple Mac OS Application Signing") echo "apple" ;;
+    # macOS 26 names Apple's own leaf certificate "macOS Software Signing";
+    # earlier releases say "Software Signing". Missing the new name classed
+    # every Apple binary as a third-party developer (DEVLOG Bug 20).
+    "Software Signing"|"macOS Software Signing"|"Apple Mac OS Application Signing") echo "apple" ;;
     "") echo "adhoc" ;;
     *) echo "signed:$AUTH" ;;
   esac
@@ -202,6 +205,16 @@ else
   if [ -z "$NEW" ] && [ -z "$GONE" ]; then
     pass "Nothing has changed since the baseline of $(stat -f '%Sm' -t '%Y-%m-%d' "$BASELINE") — persistence, helpers, extensions, apps and listeners all stable"
   else
+    # Something disappearing is not a threat, but it is not nothing either:
+    # it is recorded (no score impact), and "nothing new" is the pass. Before,
+    # a removal-only diff recorded nothing and the check vanished from the
+    # report's coverage (Bug 21).
+    if [ -z "$NEW" ]; then
+      pass "Nothing new since the baseline of $(stat -f '%Sm' -t '%Y-%m-%d' "$BASELINE") — no new persistence, helpers, extensions, apps or listeners"
+    fi
+    if [ -n "$GONE" ]; then
+      info "$(printf '%s\n' "$GONE" | grep -c .) baseline item(s) are gone — software removed, or an app that is not running right now"
+    fi
     if [ -n "$NEW" ]; then
       out "  ${RED}NEW since baseline:${RST}"
       while IFS= read -r L; do flag "NEW since baseline: $L"; done <<EOF
@@ -243,7 +256,11 @@ while read -r NAME PID; do
   case "$S" in
     unsigned|adhoc)
       case "$BIN" in
-        /System/*|/usr/bin/*|/usr/sbin/*|/usr/libexec/*|/sbin/*) out "      $LINE" ;;  # SIP-protected Apple code
+        # SIP-protected Apple code (SIP itself is verified by redflag_scan.sh).
+        # Say "not verified", not "unsigned": codesign can fail on a system
+        # path for reasons that are not a missing signature.
+        /System/*|/usr/bin/*|/usr/sbin/*|/usr/libexec/*|/sbin/*)
+          out "      $(printf '%s' "$LINE" | sed "s/sig:$S/sig:not verified (SIP-protected system path)/")" ;;
         *)
           if [ -n "${NEPTUNE_SUITE:-}" ] && [ -n "$LISTENS" ]; then
             out "      $LINE   (listener — signing checked by redflag_scan.sh)"

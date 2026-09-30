@@ -196,8 +196,10 @@ if [ -n "${GATEWAY:-}" ]; then
   echo "  Gateway ($GATEWAY):  ${GW_PING:-?} ms avg, ${GW_MAX:-?} ms worst (5 pings)"
   if [ -n "${GW_PING:-}" ] && awk "BEGIN{exit !($GW_PING > 10)}"; then
     warn "Gateway latency over 10ms on your own LAN (${GW_PING} ms average over 5 pings)"
-    echo "       If this is Wi-Fi, check mesh node placement/backhaul; if Ethernet,"
-    echo "       that's unusual."
+    echo "       On Wi-Fi this is usually the path, not the Mac: a mesh node that reaches"
+    echo "       the main router over a WIRELESS backhaul adds a radio hop each way."
+    echo "       Cable the nodes together (Ethernet backhaul) or move this Mac closer to"
+    echo "       the main router. On Ethernet, 10ms to your own router is unusual."
   elif [ -n "${GW_PING:-}" ]; then
     pass "Gateway latency is healthy (${GW_PING} ms average over 5 pings)"
   else
@@ -217,7 +219,7 @@ echo "  ${BOLD}Bufferbloat note:${RST} the numbers above are IDLE latency. Buffe
 echo "  shows up UNDER LOAD. To test properly, run the Waveform bufferbloat test"
 echo "  (search 'waveform bufferbloat') in a browser — it measures latency during"
 echo "  saturated up/download and grades A-F. If it grades C or worse, turn on"
-echo "  your router's smart queueing / QoS (ASUS calls it Adaptive QoS) — that's the fix."
+echo "  your router's smart queueing / QoS (ASUS: Adaptive QoS; eero, Google, Ubiquiti: Smart Queue / SQM) — that's the fix."
 echo "  Or measure it here: ./netcheck_plus.sh --load"
 
 ############################################################

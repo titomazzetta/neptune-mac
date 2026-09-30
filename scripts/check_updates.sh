@@ -285,8 +285,12 @@ while IFS= read -r APP; do
   NAME=$(basename "$APP")
   printf '%s\n' "$CASK_APPS" | grep -qxF "$NAME" && continue
   [ -e "$APP/Contents/_MASReceipt/receipt" ] && continue
+  # Apple's own: by bundle id, with the signing authority as a second test —
+  # macOS 26 renamed it "macOS Software Signing", and Safari was listed here as
+  # an app nothing updates (Bug 20).
+  case "$(defaults read "$APP/Contents/Info" CFBundleIdentifier 2>/dev/null)" in com.apple.*) continue ;; esac
   AUTH=$(codesign -dvv "$APP" 2>&1 | grep -m1 '^Authority=' | cut -d= -f2)
-  [ "$AUTH" = "Software Signing" ] && continue          # Apple's own
+  case "$AUTH" in "Software Signing"|"macOS Software Signing") continue ;; esac
   VER=$(defaults read "$APP/Contents/Info" CFBundleShortVersionString 2>/dev/null || echo "?")
   UNMANAGED+=("$NAME  (v$VER)")
 done < <(find /Applications -maxdepth 1 -name "*.app" 2>/dev/null | sort)

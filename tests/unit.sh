@@ -81,6 +81,7 @@ sig_in() { # <script> <fixture> <valid 0|1> [path]
 }
 for S in redflag_scan.sh sentry.sh; do
   t_is "$S: Apple binary -> apple" "apple" "$(sig_in "$S" "$FIX/codesign-apple.txt" 0)"
+  t_is "$S: macOS 26 authority name -> apple (Bug 20)" "apple" "$(sig_in "$S" "$FIX/codesign-apple-macos26.txt" 0)"
   t_is "$S: Developer ID -> signed, signer named" \
      "signed:Developer ID Application: Distributed Creation Inc (9962T6AKMH)" \
      "$(sig_in "$S" "$FIX/codesign-developer-id.txt" 0)"

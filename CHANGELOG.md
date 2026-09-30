@@ -13,7 +13,7 @@ explains each in full — symptom, root cause, fix, and what was learned.
 
 The "look at everything" pass: every scan re-read for what it does when
 something goes wrong, the pipeline made fail-closed, tests pointed at the code
-that ships, and CI extended to the platform it ships on. Bugs 13–19 in the
+that ships, and CI extended to the platform it ships on. Bugs 13–21 in the
 DEVLOG.
 
 ### Fixed
@@ -41,6 +41,14 @@ DEVLOG.
   3.2.57 built from Apple's source, before release. Inventory failures now stop
   the script; `tests/bash32_gate.py` checks every substitution for the three
   constructs 3.2 cannot run.
+- **Apple binaries classed as a third-party developer on macOS 26 (Bug 20)** —
+  the signing leaf is now "macOS Software Signing"; Safari was listed as
+  self-updating. Found by the first 1.0 run on the development Mac.
+- **Two contradicted all-clears (Bug 21):** "every listener is signed" beside an
+  unsigned one that was reported as persistence; a removal-only baseline diff
+  that recorded nothing.
+- Gateway-latency advice now explains wireless mesh backhaul; the QoS hint names
+  more than one router brand.
 
 ### Added
 - **Check ids and pass records.** Every check records a stable id, and a `pass`

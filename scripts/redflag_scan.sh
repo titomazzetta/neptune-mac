@@ -76,7 +76,10 @@ sig() {
   case "$INFO" in *"Signature=adhoc"*) echo "adhoc"; return ;; esac
   AUTH=$(printf '%s\n' "$INFO" | grep -m1 '^Authority=' | cut -d= -f2)
   case "$AUTH" in
-    "Software Signing"|"Apple Mac OS Application Signing") echo "apple" ;;
+    # macOS 26 names Apple's own leaf certificate "macOS Software Signing";
+    # earlier releases say "Software Signing". Missing the new name classed
+    # every Apple binary as a third-party developer (DEVLOG Bug 20).
+    "Software Signing"|"macOS Software Signing"|"Apple Mac OS Application Signing") echo "apple" ;;
     "") echo "adhoc" ;;
     *) echo "signed:$AUTH" ;;
   esac
@@ -491,7 +494,10 @@ ${L%%|*}"
       if is_system_path "${BIN:-}"; then
         ok "$DESC — system binary"
       elif already_flagged "${BIN:-}"; then
-        ok "$DESC — already flagged above"
+        # Still a problem: counted, so the all-clear line below cannot print —
+        # it said "every listener is signed" beside an unsigned one (Bug 21).
+        LISTEN_PROBLEMS=$((LISTEN_PROBLEMS + 1))
+        note "  $DESC — $(sig_word "$S"), reported above with the launch item that runs it"
       else
         LISTEN_PROBLEMS=$((LISTEN_PROBLEMS + 1)); CHECK=listeners
         flag "Listener with unverifiable signature: $DESC binary:${BIN:-?}"

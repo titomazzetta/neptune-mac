@@ -1068,6 +1068,40 @@ tree. The macOS CI job runs the real `/bin/bash` 3.2 as well.
 fourth version of the same rule: *the platform the tests pass on is the only
 platform they have proven anything about.*
 
+## Bug 20 — macOS 26 renamed Apple's signing certificate
+
+The first 1.0 run on the development Mac (macOS 26.6.2) labelled `launchd`,
+`/usr/bin/open` and every other Apple binary `signed:macOS Software Signing` —
+a third-party developer called "macOS Software Signing". `sig()` recognised
+Apple by the leaf certificate's name, `Software Signing`, and macOS 26 calls it
+`macOS Software Signing`.
+
+Nothing was *missed* — an identified developer passes too — but the
+classification was wrong, and one consumer depended on it: `check_updates.sh`
+listed **Safari** among "apps nothing updates for you". Both names are now
+Apple, the app inventory identifies Apple's apps by bundle id first, and there
+is a fixture with the new name. `tests/macos.sh` already asserts that
+`/bin/ls` classifies as `apple` on the CI runner, so the next rename fails a
+build instead of a report.
+
+## Bug 21 — two all-clear lines that the same run contradicted
+
+Also from that run:
+
+- **"Every listening process is signed by Apple or an identified developer"**
+  printed directly under WavesLocalServer — unsigned, listening on
+  `127.0.0.1:6985`. The listener check skipped binaries already reported as
+  persistence (the Bug 17 de-duplication) and forgot to count them as problems,
+  so the pass line fired. The helper check had been fixed for exactly this; the
+  listener check had not. It now counts them and prints the skip as a note, not
+  as `[ok]`.
+- **A baseline diff with only removals recorded nothing** — no pass, no note —
+  so the change-detection check silently dropped out of the report's coverage.
+  "Nothing new" is now the pass, and removals are recorded as information.
+
+Same lesson as Bug 13 at the scale of one line: a sentence that says "all
+clear" has to be computed from the same facts as the findings beside it.
+
 ### What this pass changed about the tests
 
 Every earlier test of the pipeline tested a **transcription** of it: the scoring
