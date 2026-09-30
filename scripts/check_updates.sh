@@ -115,6 +115,29 @@ join_names() {
        END { if (n > 5) s = s " and " (n - 5) " more"; print s }'
 }
 
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+
+# python_ok — same contract as neptune.sh: never run the /usr/bin/python3 stub
+# that pops an install dialog on a Mac without the Command Line Tools.
+python_ok() {
+  local P
+  P=$(command -v python3 2>/dev/null) || return 1
+  if [ "$(uname -s)" = "Darwin" ] && [ "$P" = "/usr/bin/python3" ]; then
+    xcode-select -p >/dev/null 2>&1 || return 1
+  fi
+  "$P" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 6) else 1)' >/dev/null 2>&1
+}
+
+# catalog_compare <cask-catalog> <installed-cask-tokens> — "App.app<TAB>version"
+# lines on stdin; prints app, cask, installed, latest, behind|current|unknown for
+# the apps the catalog knows. Casks already installed are dropped: brew outdated
+# reports those, and one update should be one finding.
+catalog_compare() {
+  python3 "$DIR/neptune_inspect.py" cask-versions "$1" 2>/dev/null \
+    | INST="$2" awk -F'\t' 'BEGIN { n = split(ENVIRON["INST"], a, "\n"); for (i = 1; i <= n; i++) own[a[i]] = 1 }
+                            !($2 in own)'
+}
+
 [ "${NEPTUNE_LIB:-}" = "1" ] && return 0
 
 UPGRADE=false
@@ -280,6 +303,7 @@ if command -v brew >/dev/null 2>&1; then
 fi
 
 UNMANAGED=()
+PAIRS=""
 while IFS= read -r APP; do
   [ -n "$APP" ] || continue
   NAME=$(basename "$APP")
@@ -293,6 +317,8 @@ while IFS= read -r APP; do
   case "$AUTH" in "Software Signing"|"macOS Software Signing") continue ;; esac
   VER=$(defaults read "$APP/Contents/Info" CFBundleShortVersionString 2>/dev/null || echo "?")
   UNMANAGED+=("$NAME  (v$VER)")
+  PAIRS="$PAIRS$NAME	$VER
+"
 done < <(find /Applications -maxdepth 1 -name "*.app" 2>/dev/null | sort)
 
 if [ ${#UNMANAGED[@]} -eq 0 ]; then
@@ -300,6 +326,31 @@ if [ ${#UNMANAGED[@]} -eq 0 ]; then
 else
   note "These rely on their own updaters — open them now and then, or check the vendor:"
   for A in ${UNMANAGED[@]:+"${UNMANAGED[@]}"}; do echo "      $A"; done
+  echo
+  # Which of them are BEHIND? Homebrew's cask catalog is already on disk
+  # (brew update refreshed it above), so comparing against it costs no extra
+  # network call and asks no vendor anything. An app it does not know stays
+  # "check it yourself" — Neptune does not guess.
+  CHECK=app-updates
+  CATALOG=""
+  command -v brew >/dev/null 2>&1 && CATALOG="$(brew --cache 2>/dev/null)/api/cask.jws.json"
+  if [ -n "$CATALOG" ] && [ -f "$CATALOG" ] && python_ok; then
+    INSTALLED_CASKS=$(brew list --cask 2>/dev/null)
+    CMP=$(printf '%s' "$PAIRS" | catalog_compare "$CATALOG" "$INSTALLED_CASKS")
+    NCMP=$(printf '%s' "$CMP" | grep -c .)
+    BEHIND=$(printf '%s\n' "$CMP" | awk -F'\t' '$5 == "behind"')
+    NB=$(printf '%s' "$BEHIND" | grep -c .)
+    echo
+    if [ "$NB" -gt 0 ]; then
+      upd "$NB self-updating apps are behind Homebrew's catalog: $(printf '%s\n' "$BEHIND" | awk -F'\t' '{sub(/\.app$/, "", $1); print $1 " " $3 " -> " $4}' | join_names)"
+      printf '%s\n' "$BEHIND" | awk -F'\t' '{printf "      %-28s %s -> %s   (update in the app, or: brew install --cask --adopt %s)\n", $1, $3, $4, $2}'
+    elif [ "$NCMP" -gt 0 ]; then
+      pass "The $NCMP self-updating apps Homebrew's catalog knows are current"
+    fi
+    [ "$NCMP" -gt 0 ] && note "Compared $NCMP of ${#UNMANAGED[@]} against Homebrew's catalog; the rest are not in it."
+  else
+    note "(Homebrew's catalog or python3 is not available, so versions were not compared.)"
+  fi
   echo
   note "Many have Homebrew casks; to hand one over:  brew install --cask --adopt <name>"
   note "Leave license-managed software (plug-in managers, iLok and similar) on the"
