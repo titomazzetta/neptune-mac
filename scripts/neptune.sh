@@ -9,8 +9,9 @@
 # and one combined plain-text report. Optionally a readable HTML report and
 # structured JSON.
 #
-# Read-only throughout. No --upgrade, no deletions; uninstall.sh,
-# remove_mackeeper.sh and clean_caches.sh are never run by this script.
+# The scan is read-only throughout: no --upgrade, no deletions. Fixing is a
+# separate, explicit step — ./neptune.sh --fix hands over to fix.sh, which asks
+# before every change.
 #
 # Run ./neptune.sh --help for flags and exit codes.
 
@@ -40,7 +41,7 @@ set -u
 # ---------------------------------------------------------------------------
 export LC_ALL=C
 
-NEPTUNE_VERSION="1.0.0"
+NEPTUNE_VERSION="1.1.0"
 
 BOLD=$(tput bold 2>/dev/null || true)
 CYN=$(tput setaf 6 2>/dev/null || true)
@@ -231,6 +232,8 @@ nep_exit_status() {
 # nep_listing <scored> <listing-out> <run-label>
 #
 # The numbered, actionable list — attention, then could-not-check, then minor —
+# as n, severity, category, key, title, check (the check id is last so older
+# readers of the first five columns keep working; fix.sh keys on it) —
 # exactly as the terminal, the HTML report and --acknowledge number it. Saved
 # after every run so that `--acknowledge 5` means item 5 of the list you READ,
 # not item 5 of a fresh scan whose numbering may have shifted (DEVLOG Bug 14).
@@ -238,12 +241,12 @@ nep_listing() {
   local SCR=$1 OUT=$2 LABEL=$3
   {
     printf '# %s\n' "$LABEL"
-    printf '# n\tseverity\tcategory\tkey\ttitle\n'
+    printf '# n\tseverity\tcategory\tkey\ttitle\tcheck\n'
     awk -F'|' '
       $7 == 0 && $1 == "attention" { a[++na] = $0 }
       $7 == 0 && $1 == "unknown"   { u[++nu] = $0 }
       $7 == 0 && $1 == "notice"    { m[++nm] = $0 }
-      function emit(rec,   f) { split(rec, f, "|"); printf "%d\t%s\t%s\t%s\t%s\n", ++n, f[1], f[2], f[6], f[5] }
+      function emit(rec,   f) { split(rec, f, "|"); printf "%d\t%s\t%s\t%s\t%s\t%s\n", ++n, f[1], f[2], f[6], f[5], f[4] }
       END { for (i = 1; i <= na; i++) emit(a[i])
             for (i = 1; i <= nu; i++) emit(u[i])
             for (i = 1; i <= nm; i++) emit(m[i]) }
@@ -279,7 +282,7 @@ render_verdict() {
   # ONE number sequence across the three sections, read from the saved listing
   # so what is printed and what --acknowledge resolves are the same file.
   local LAST="" N SEV CAT KEY TITLE VEN
-  while IFS="$(printf '\t')" read -r N SEV CAT KEY TITLE; do
+  while IFS="$(printf '\t')" read -r N SEV CAT KEY TITLE _CHK; do
     case "$N" in ''|'#'*) continue ;; esac
     if [ "$SEV" != "$LAST" ]; then
       echo
@@ -312,6 +315,7 @@ render_verdict() {
 
   if [ "${N_ATTENTION:-0}" -gt 0 ] || [ "${N_NOTICE:-0}" -gt 0 ]; then
     echo
+    echo "  Fix them one at a time, each shown and confirmed:  ./neptune.sh --fix"
     echo "  Recurring vendor quirk rather than a problem? Acknowledge it:"
     echo "      ./neptune.sh --acknowledge <n>      (number from the list above)"
   fi
@@ -439,6 +443,9 @@ neptune.sh — run the Neptune scans, then report a verdict and scores.
   ./neptune.sh --acknowledge N    mark finding N from your LAST run as a
                                   known-good vendor quirk (no re-scan)
   ./neptune.sh --acknowledge 2,5  several at once
+  ./neptune.sh --fix              walk your LAST run's findings one at a time:
+                                  the fix, its exact command, then a y/N for
+                                  each; re-scan at the end to see before/after
   ./neptune.sh --replay FILE      re-render a saved --json file (or a findings
                                   file) without scanning: no sudo, no state
                                   written — for demos, CI and second opinions
@@ -477,6 +484,7 @@ while [ $# -gt 0 ]; do
     --acknowledge) shift; ACK_ARG="${1:-}"; [ -n "$ACK_ARG" ] || { echo "--acknowledge needs a number" >&2; exit 64; } ;;
     --replay)      shift; REPLAY="${1:-}";  [ -n "$REPLAY" ]  || { echo "--replay needs a file" >&2; exit 64; } ;;
     --out)         shift; OUT_DIR="${1:-}"; [ -n "$OUT_DIR" ] || { echo "--out needs a directory" >&2; exit 64; } ;;
+    --fix)         exec "$DIR/fix.sh" ;;
     --version)     echo "neptune $NEPTUNE_VERSION"; exit 0 ;;
     -h|--help)     usage; exit 0 ;;
     *)             echo "Unknown option: $1  (try --help)" >&2; exit 64 ;;

@@ -194,6 +194,18 @@ t_section "check_updates.sh — softwareupdate parser and timeout"
   t_is "join_names caps at five" "a, b, c, d, e and 2 more" "$(printf 'a\nb\nc\nd\ne\nf\ng\n' | join_names)"
   t_is "clip keeps whole words" "one two ..." "$(echo 'one two three four' | clip 9)"
   t_is "clip of one long word" "..." "$(echo 'abcdefghijkl' | clip 5)"
+  CMP=$(printf 'Audacity.app\t3.7.8.0\nzoom.us.app\t7.1.9 (88375)\nSoulseekQt.app\t?\nUnknown.app\t1.0\n' \
+        | catalog_compare "$FIX/cask-catalog.jws.json" "$(printf 'foo\nbar')")
+  t_is "catalog: an app behind the cask version is 'behind'" "audacity 3.7.9 behind" \
+     "$(printf '%s\n' "$CMP" | awk -F'\t' '$1=="Audacity.app"{print $2, $4, $5}')"
+  t_is "catalog: '7.1.9 (88375)' vs '7.1.9.88375' is the same release, not behind" "current" \
+     "$(printf '%s\n' "$CMP" | awk -F'\t' '$1=="zoom.us.app"{print $5}')"
+  t_is "catalog: a version with no number is unknown, never behind" "unknown" \
+     "$(printf '%s\n' "$CMP" | awk -F'\t' '$1=="SoulseekQt.app"{print $5}')"
+  t_is "catalog: an app the catalog does not know is left out" "" \
+     "$(printf '%s\n' "$CMP" | grep '^Unknown.app' || true)"
+  t_is "catalog: an app already installed as a cask is left to brew outdated" "" \
+     "$(printf 'Audacity.app\t3.7.8.0\n' | catalog_compare "$FIX/cask-catalog.jws.json" audacity)"
   START=$(date +%s)
   with_timeout 1 sleep 5; RC=$?
   ELAPSED=$(( $(date +%s) - START ))
@@ -224,6 +236,45 @@ t_section "clean_caches.sh — selection parser"
     t_ok "Apple, iCloud and Homebrew caches are never offered"
   else t_fail "Apple, iCloud and Homebrew caches are never offered" yes no; fi
 )
+
+############################################################
+t_section "fix.sh — the guided fixer"
+############################################################
+(
+  # shellcheck source=/dev/null
+  NEPTUNE_LIB=1 . scripts/fix.sh >/dev/null 2>&1
+  BAD=""
+  for C in $(grep -ohE '\bCHECK=[a-z0-9-]+' scripts/*.sh | sed 's/CHECK=//' | sort -u) scan-failed unknown-thing; do
+    plan_for "$C" "UNSIGNED persistence: x runs /Applications/Some App.app/Contents/MacOS/x (/Library/LaunchAgents/x.plist)"
+    case "$KIND" in run|open|guide) ;; *) BAD="$BAD $C:kind=$KIND" ;; esac
+    case "$CMD" in *'|'*|*';'*|*'&'*|*'>'*|*'<'*|*'`'*|*'$('*) BAD="$BAD $C:cmd" ;; esac
+    [ "$KIND" = guide ] && [ -z "$GUIDE" ] && BAD="$BAD $C:no-guidance"
+  done
+  t_is "every check id gets a plan: a kind, a plain command, or guidance" "" "$BAD"
+  plan_for firewall "x"
+  t_is "the firewall fix is the documented one-liner" \
+     "run|sudo /usr/libexec/ApplicationFirewall/socketfilterfw --setglobalstate on" "$KIND|$CMD"
+  plan_for macos-updates x; A1=$ACTION; plan_for brew-outdated x; A2=$ACTION; plan_for mas-outdated x
+  t_is "one upgrade run covers macOS, brew and App Store findings" "upgrade upgrade upgrade" "$A1 $A2 $ACTION"
+  plan_for persistence-launchd "UNSIGNED persistence: a runs /Applications/SoundID Reference.app/Contents/MacOS/x (/p.plist)"
+  t_is "an unsigned app's finding offers its uninstall, name kept whole" "uninstall:SoundID Reference" "$ACTION"
+  plan_for double-nat x
+  t_is "no invented fix where there is none (double NAT is a router setting)" "guide" "$KIND"
+  t_is "run_words: a ; is data, not a command separator" "a;b" "$(run_words 'printf %s a;b')"
+  t_is "run_words: no globbing" "*" "$(cd "$T" && run_words 'printf %s *')"
+)
+t_is "fix.sh contains no eval and deletes nothing itself" "" \
+   "$(grep -nE '^[^#]*\b(eval|rm)[[:space:]]' scripts/fix.sh || true)"
+FH="$T/fixhome"; mkdir -p "$FH/.neptune"
+W="$T/wfix"; mkdir -p "$W"
+nep_run_pipeline "$FIX/findings-2026-09-18.txt" "$T/allow" "$W" "run 2026-09-18 09:00"
+cp "$LISTING" "$FH/.neptune/last-listing.tsv"
+PLANOUT=$(HOME="$FH" ./scripts/fix.sh --plan)
+t_is "--plan covers every numbered item" "$(grep -vc '^#' "$LISTING")" "$(printf '%s\n' "$PLANOUT" | grep -vc '^#')"
+t_is "--plan changes nothing and writes no log" "no" "$([ -e "$FH/.neptune/fix-log.tsv" ] && echo yes || echo no)"
+mkdir -p "$T/nofix"
+HOME="$T/nofix" ./scripts/fix.sh --plan >/dev/null 2>&1
+t_is "no saved run yet: exit 64" "64" "$?"
 
 ############################################################
 t_section "Every scan's record() writes one well-formed line"
