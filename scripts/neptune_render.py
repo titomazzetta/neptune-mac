@@ -562,6 +562,13 @@ REMEDIATION = [
      "software (plug-in managers, iLok-protected tools) on its vendor's own updater.",
      lambda t: [("brew outdated", "look", "Lists what would be upgraded. Changes nothing."),
                 ("brew upgrade", "software", "Upgrades Homebrew formulae and casks.")]),
+    (("app-updates",), r"self-updating apps are behind",
+     "Apps that update themselves are behind the version Homebrew's catalog lists. "
+     "They are not managed by Homebrew, so nothing updates them unless you open them.",
+     "Use each app's own Check for Updates, or hand it to Homebrew once so brew upgrade "
+     "keeps it current. Leave licence-managed software on its vendor's updater.",
+     lambda t: [("brew install --cask --adopt cask-name", "software",
+                 "Lets Homebrew take over an app already installed by hand. Substitute the cask named in the report.")]),
     (("mas-outdated",), None,
      "App Store apps have updates available.",
      "Update them in the App Store app, or with mas.",

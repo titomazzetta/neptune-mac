@@ -6,6 +6,7 @@ on a Mac without the Command Line Tools, /usr/bin/python3 is a stub that pops an
 install dialog, so the scans never call it blindly). Standard library only.
 
     neptune_inspect.py extensions <browser-profile-root>...
+    neptune_inspect.py cask-versions <cask.jws.json> < "App.app<TAB>installed-version" lines
 
 Prints one tab-separated line per installed extension:
 
@@ -96,10 +97,80 @@ def extensions(roots):
     return out
 
 
+def _load_casks(path):
+    """Homebrew's local cask catalog (the API cache `brew update` refreshes):
+    either a JWS envelope whose payload is a JSON string, or a plain JSON list.
+    Reading it costs no network: it is already on disk."""
+    data = _load_json(path)
+    if isinstance(data, dict) and isinstance(data.get("payload"), str):
+        try:
+            data = json.loads(data["payload"])
+        except ValueError:
+            return []
+    return data if isinstance(data, list) else []
+
+
+def _vtuple(v):
+    """'3.7.10' -> (3, 7, 10). None when the version has no leading number —
+    'latest', build hashes — because then there is nothing honest to compare."""
+    v = str(v).split(",")[0].strip()
+    parts = []
+    for piece in v.replace("-", ".").split("."):
+        digits = ""
+        for ch in piece:
+            if ch.isdigit():
+                digits += ch
+            else:
+                break
+        if digits == "":
+            break
+        parts.append(int(digits))
+    return tuple(parts) or None
+
+
+def cask_versions(catalog, pairs):
+    """For each (app bundle name, installed version), find the cask that ships
+    that app and compare. Yields app, token, installed, latest, state where
+    state is behind | current | unknown."""
+    by_app = {}
+    for cask in _load_casks(catalog):
+        if not isinstance(cask, dict):
+            continue
+        for art in cask.get("artifacts") or []:
+            if isinstance(art, dict) and isinstance(art.get("app"), list):
+                for a in art["app"]:
+                    if isinstance(a, str) and a.endswith(".app"):
+                        by_app.setdefault(a, (cask.get("token", ""), cask.get("version", "")))
+    for app, installed in pairs:
+        if app not in by_app:
+            continue
+        token, latest = by_app[app]
+        a, b = _vtuple(installed), _vtuple(latest)
+        if a is None or b is None:
+            state = "unknown"
+        else:
+            # Compare the parts both have. "7.1.9 (88375)" vs "7.1.9.88375"
+            # is the same release written two ways; padding with zeros would
+            # call it outdated. A missed update is a smaller error here than a
+            # false one, which teaches people to ignore the list.
+            n = min(len(a), len(b))
+            state = "behind" if a[:n] < b[:n] else "current"
+        yield app, token, installed, str(latest).split(",")[0], state
+
+
 def main(argv):
     if len(argv) >= 2 and argv[1] == "extensions":
         for line in extensions(argv[2:]):
             print(line)
+        return 0
+    if len(argv) == 3 and argv[1] == "cask-versions":
+        pairs = []
+        for line in sys.stdin:
+            f = line.rstrip("\n").split("\t")
+            if len(f) == 2 and f[0]:
+                pairs.append((f[0], f[1]))
+        for row in cask_versions(argv[2], pairs):
+            print("\t".join(row))
         return 0
     sys.stderr.write(__doc__)
     return 64

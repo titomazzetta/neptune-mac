@@ -43,11 +43,10 @@ stale-apps and unmanaged-apps listings, and a meaningful extra signal.
 
 Removed deliberately, so they stop reading as debt:
 
-- **Interactive orchestrator with keep/delete/skip.** Substantial work and real
-  risk for a tool whose value is the diagnosis, not the doing. The destructive
-  paths already exist, are confirmed, and are better entered knowingly.
-  `--acknowledge` covers the "I've seen this, stop counting it" case that
-  motivated most of it.
+- **Unattended or "fix everything" modes.** `--fix` (1.1) is guided on purpose:
+  one finding, one shown command, one `y`. A mode that applies fixes without a
+  person reading each one is the cleaner-product pattern this project exists
+  to argue against, and it will not be added.
 - **Bundled local-model advisor.** `--json` plus [`docs/advisor.md`](docs/advisor.md)
   is the decoupled version and works with any model. Shipping an integration means
   shipping a dependency and a key-handling story, for little gain over "paste this
@@ -57,6 +56,11 @@ Removed deliberately, so they stop reading as debt:
   tool, not a port that muddies these scripts.
 
 ## Done
+
+**v1.1.0** — guided fixing: `./neptune.sh --fix` walks the last run's findings
+with the exact command for each and a y/N per item, hands deletion to the
+confirmed scripts, logs every change, and re-scans at the end. Self-updating
+apps are compared against Homebrew's local catalog.
 
 **v1.0.0 — 2026-09** (full list in [`CHANGELOG.md`](CHANGELOG.md)):
 

@@ -1115,6 +1115,39 @@ says about itself.
 
 ---
 
+## 1.1 — from diagnosing to fixing, without becoming a cleaner
+
+The first real 1.0 report raised the obvious question: if Neptune knows the
+firewall is off, the Guest account is on and 22 packages are outdated, why does
+it stop at telling you? The ROADMAP had ruled out an "interactive orchestrator"
+as risk without enough payoff. What changed is the shape of the answer, not the
+rule.
+
+`--fix` is designed around the failure modes of the products this tool
+replaces:
+
+- **Per finding, not per run.** One item, the fix, the *exact* command, the kind
+  of change, then `y`. A cleaner's "Fix all (23)" button is the thing being
+  argued against.
+- **What you see is what runs.** The command is plain words, executed without
+  `eval` or globbing; Neptune's own scripts are called by path with fixed flags.
+  The test that guards the remediation table guards this table too.
+- **No new deletion code.** Every removal goes through `uninstall.sh` or
+  `clean_caches.sh`, which already have their blast-radius harness. `fix.sh`
+  itself cannot delete a file, and a test asserts it contains no `rm` and no
+  `eval`.
+- **No invented fixes.** For double NAT, FileVault, SIP or a helper nobody can
+  place, the honest output is instructions, or the right Settings pane.
+- **Measured, not claimed.** The session ends with an offer to re-scan, and the
+  HTML report's "since last run" deltas are the evidence that a fix worked.
+
+Updates got the same treatment. Homebrew already knows the latest version of
+most self-updating apps — its cask catalog sits on disk after `brew update` — so
+comparing against it answers "which of these are out of date?" with no call to
+any vendor. The comparison is deliberately conservative: `7.1.9 (88375)` and
+`7.1.9.88375` are the same release, and a false "outdated" teaches people to
+ignore the list faster than a missed one does.
+
 ## Cross-cutting practices that came out of these
 
 - **CI as a regression net for exactly these bugs.** Linux runs shellcheck,

@@ -9,6 +9,28 @@ explains each in full — symptom, root cause, fix, and what was learned.
 
 ---
 
+## [1.1.0] — 2026-09-30
+
+Neptune goes from diagnosing to fixing — with the same rule as everything else:
+nothing changes without being shown and confirmed.
+
+### Added
+- **`./neptune.sh --fix`** (`scripts/fix.sh`): walks the last run's numbered
+  findings. For each, the fix, its exact command and what kind of change it is,
+  then y / Enter to skip / q to stop. Turns on the firewall, disables the Guest
+  account and auto-login, re-enables update checks, runs one confirmed upgrade
+  for macOS/Homebrew/App Store, clears Homebrew's cache, hands cache-clearing
+  and app removal to the confirmed scripts, offers `--acknowledge` for vendor
+  helpers you recognize, or opens the right System Settings pane. Guidance, not
+  invented commands, where no honest fix exists. Deletes nothing itself; logs
+  every applied fix to `~/.neptune/fix-log.tsv`; offers a re-scan at the end.
+  `./fix.sh --plan` previews without changing anything.
+- **Self-updating apps compared against Homebrew's catalog** — the cask catalog
+  `brew update` already keeps on disk, so no extra network call. "Audacity
+  3.7.8 → 3.7.9" instead of "check your apps". Conservative comparison: two
+  spellings of one release are not reported as outdated.
+- The saved listing carries the check id (sixth column), which the fixer keys on.
+
 ## [1.0.0] — 2026-09-25
 
 The "look at everything" pass: every scan re-read for what it does when
