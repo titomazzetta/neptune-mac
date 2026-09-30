@@ -29,6 +29,11 @@ grep -nE "$BUILTINS" scripts/*.sh tests/*.sh | grep -vE '^[^:]+:[0-9]+:[[:space:
 # even inside a substitution, so a body that merely MENTIONS them fails to
 # parse. bash -n on a bash 5 runner cannot catch it.
 grep -nE '(\$|<)\(.*<<' scripts/*.sh tests/*.sh && { echo "ERROR heredoc inside a substitution — breaks bash 3.2"; fail=1; } || echo "  ok  no heredoc-in-substitution"
+# The multi-line version of both, plus backticks (comments count): bash 3.2
+# re-parses a substitution's text when it runs, so bash -n never sees these.
+if command -v python3 >/dev/null; then
+  python3 tests/bash32_gate.py scripts/*.sh tests/*.sh && echo "  ok  no case, heredoc or backtick inside any \$( ) or <( )" || fail=1
+fi
 
 echo "== destructive-script guardrails =="
 # Coarse, and deliberately so: the blast-radius harness below is the real test.

@@ -13,7 +13,7 @@ explains each in full — symptom, root cause, fix, and what was learned.
 
 The "look at everything" pass: every scan re-read for what it does when
 something goes wrong, the pipeline made fail-closed, tests pointed at the code
-that ships, and CI extended to the platform it ships on. Bugs 13–18 in the
+that ships, and CI extended to the platform it ships on. Bugs 13–19 in the
 DEVLOG.
 
 ### Fixed
@@ -36,6 +36,11 @@ DEVLOG.
 - `sentry.sh` re-sorts both sides before `comm`, so a baseline written under the
   old locale cannot produce phantom NEW lines.
 - The `towc` DEVLOG entry (12b) corrected: it was an abort, not a warning.
+- **The cache cleaner reported "nothing to clear" on bash 3.2 (Bug 19)** — a
+  backtick in a comment inside `<( )`. Found by running the suites under bash
+  3.2.57 built from Apple's source, before release. Inventory failures now stop
+  the script; `tests/bash32_gate.py` checks every substitution for the three
+  constructs 3.2 cannot run.
 
 ### Added
 - **Check ids and pass records.** Every check records a stable id, and a `pass`

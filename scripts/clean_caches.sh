@@ -147,26 +147,39 @@ $SANDBOX && echo "${BOLD}${YEL}SANDBOX MODE${RST} — operating against '$ROOT',
 ############################################################
 section "Your caches (~/Library/Caches), largest first"
 
+# The inventory is produced by a FUNCTION into a file, not by a loop inside
+# <( ). bash 3.2 re-parses a substitution's text when it runs, and a backtick
+# anywhere in it — a comment included — is "bad substitution". That is exactly
+# what happened here, and the loop that read the result then saw nothing and
+# reported "no cache worth clearing" (DEVLOG Bug 19). Now a failure to produce
+# the inventory stops the script instead of reading as an empty one.
+list_caches() {
+  local D B
+  for D in "$CACHES"/* "$CACHES"/.[!.]*; do
+    [ -e "$D" ] || [ -L "$D" ] || continue
+    B=$(basename "$D")
+    # a tab or newline in the name would make `read` below name a different folder
+    [ "$B" = "$(printf '%s' "$B" | tr -d '\t\n')" ] || continue
+    printf '%s\t%s\n' "$(du -sk "$D" 2>/dev/null | awk '{print $1 + 0}')" "$B"
+  done
+}
+INV=$(mktemp "${TMPDIR:-/tmp}/neptune-caches.XXXXXX") || die "Could not create a temporary file."
+trap 'rm -f "$INV" "$INV.raw"' EXIT
+list_caches > "$INV.raw" && sort -t "$(printf '\t')" -k1,1rn "$INV.raw" > "$INV" \
+  || { rm -f "$INV.raw"; die "Could not list $CACHES. Nothing was changed."; }
+rm -f "$INV.raw"
+
 NAMES=()
 SIZES=()
 SKIPPED=""
 while IFS=$'\t' read -r K NAME; do
   [ -n "$NAME" ] || continue
-  # Written by the producer below, which skips names with a tab or newline:
-  # `read` would trim or split them into the name of a DIFFERENT folder.
   if [ -L "$CACHES/$NAME" ]; then SKIPPED="$SKIPPED $NAME"; continue; fi
   [ -d "$CACHES/$NAME" ] || continue
   if never_offer "$NAME"; then continue; fi
   [ "$K" -ge 1024 ] || continue             # under 1 MB: not worth a line
   NAMES+=("$NAME"); SIZES+=("$K")
-done < <(for D in "$CACHES"/* "$CACHES"/.[!.]*; do
-           [ -e "$D" ] || [ -L "$D" ] || continue
-           # No `case` here: this loop is inside <( ), and bash 3.2's parser
-           # breaks on case patterns inside substitutions (CLAUDE.md rule 1).
-           B=$(basename "$D")
-           [ "$B" = "$(printf '%s' "$B" | tr -d '\t\n')" ] || continue
-           printf '%s\t%s\n' "$(du -sk "$D" 2>/dev/null | awk '{print $1 + 0}')" "$B"
-         done | sort -t "$(printf '\t')" -k1,1rn)
+done < "$INV"
 
 TOTAL=0
 i=0

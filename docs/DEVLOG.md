@@ -1036,6 +1036,38 @@ some) against stated thresholds and recorded — with the pass recorded too. Kex
 are counted from data rows only. And `clean_caches.sh` exists, so a bloat
 finding has an answer that is not "delete things by hand".
 
+## Bug 19 — a comment broke the cache cleaner on bash 3.2
+
+Found before release, by building bash 3.2.57 from Apple's own source
+(`apple-oss-distributions/bash`, tag bash-131) and running every suite under it.
+The unit tests passed. The blast-radius harness did not: five cache-cleaner
+assertions failed, and the script said *"No third-party cache over 1 MB —
+nothing worth clearing"* on a fixture with three.
+
+**Cause.** The inventory loop ran inside `<( … )`, and it carried a comment
+explaining why it avoided `case` — with `case` in backticks. bash 3.2 does not
+parse a substitution's body when it reads the script; it re-scans the text
+when the substitution **runs**, and it counts backticks while doing so,
+comments included. One pair of backticks was enough for
+`bad substitution: no closing ')'`. `bash -n` — on bash 5 *and* on bash 3.2 —
+passes the file, because the error only exists at run time.
+
+**The failure mode is the one this project keeps meeting.** The producer died;
+the `while read` consuming it saw an empty stream; an empty stream looked like a
+clean machine. It failed *safe* (nothing was deleted) but it failed *silent*,
+and "nothing to clean" from a cleaner is the all-clear in another costume.
+
+**Fix.** The inventory is now a function writing to a temp file; if producing
+it fails, the script stops and says so. And a new gate,
+`tests/bash32_gate.py`, walks every `$(` and `<(` with a quote-aware scanner and
+reports a `case`, a heredoc, or **any backtick** inside — the multi-line cases
+the old one-line greps could not see. It found exactly this one instance in the
+tree. The macOS CI job runs the real `/bin/bash` 3.2 as well.
+
+**Lesson.** A comment is code to bash 3.2's substitution parser. And the
+fourth version of the same rule: *the platform the tests pass on is the only
+platform they have proven anything about.*
+
 ### What this pass changed about the tests
 
 Every earlier test of the pipeline tested a **transcription** of it: the scoring
