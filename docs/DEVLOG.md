@@ -1,0 +1,1146 @@
+# Devlog — how Neptune was built, and what broke along the way
+
+This is an honest engineering record: the bugs, the wrong turns, and the fixes.
+It's here on purpose. A security tool is only as trustworthy as the rigor behind
+it, and the most useful thing I can show isn't that the tool works — it's *how I
+found the places where it didn't, and what I did about them.* Every entry below is
+a real issue caught during development on live machines, not a hypothetical.
+
+The through-line: in a scanner, **a false "all clear" is worse than a false
+alarm.** Most of these fixes exist because I distrusted a clean-looking result and
+checked it.
+
+---
+
+## Bug 1 — The false "all clear" (the one that mattered most)
+
+**Symptom:** `sentry.sh` printed `[FLAG]` lines during a run, then ended with an
+"All clear — nothing flagged" summary. Both. In the same run.
+
+**Why it mattered:** this is the cardinal sin of detection tooling. A tool that
+reports clean while it's actively finding things trains the user to trust a lie.
+If I'd shipped this, every "all clear" from Neptune would have been worthless.
+
+**Root cause:** the flag-collecting loop ran inside a pipeline (`... | while
+read`), which bash executes in a *subshell*. The `FLAGS` array populated inside the
+subshell evaporated when it exited, so the summary counted zero. A classic bash
+scoping trap.
+
+**Fix:** restructured the loop to use process substitution (`while read ... < <(...)`)
+so it runs in the current shell and the array survives. Verified the summary count
+now matches the flags printed.
+
+**Lesson applied everywhere:** audited every script for the same
+pipeline-into-while pattern and the same subshell-state-loss class of bug.
+
+---
+
+## Bug 2 — Every process reported identical network listeners
+
+**Symptom:** the process→network map in `sentry.sh` showed *every* process
+listening on the *same* huge list of ports — obviously wrong.
+
+**Root cause:** `lsof -i -p <pid>` ORs its selectors by default, so it returned
+every network file on the system for each PID instead of just that process's
+sockets. The output looked plausible enough to almost miss.
+
+**Fix:** added `-a` to AND the selectors (`lsof -a -i -p <pid>`), so each process
+shows only its own connections. This also killed a batch of false flags (e.g. a
+sync app appearing to "listen on everything").
+
+**Lesson:** a tool that produces *plausible* wrong output is more dangerous than
+one that crashes. Cross-checked the corrected output against known-good processes.
+
+---
+
+## Bug 3 — bash 3.2 parser crash: `case` inside command substitution
+
+**Symptom:** `redflag_scan.sh` died with a syntax error at the
+suspicious-process-location check — but only on macOS, not on newer bash.
+
+**Root cause:** macOS ships **bash 3.2 (2007)** for licensing reasons. Bash 3.2's
+parser cannot handle a `case` statement inside `$(...)` command substitution. The
+code was valid modern bash and invalid on the exact platform the tool targets.
+
+**Fix:** rewrote the check in `awk` (no shell `case` in the subshell). Added a CI
+gate that greps for this pattern so it can never return.
+
+**Lesson:** "works on my machine" is a threat model failure when your machine
+isn't the deployment target. Neptune now targets bash 3.2 explicitly, and CI
+enforces it.
+
+---
+
+## Bug 4 — bash 3.2 empty-array crash under `set -u` (found on someone else's Mac)
+
+**Symptom:** `uninstall.sh` crashed at the deletion stage —
+`PLISTS[@]: unbound variable` — on a machine where the app being removed had *no*
+launch agents. It had worked on every prior test because those apps all happened
+to have persistence items.
+
+**Why it mattered:** it failed on a *friend's* machine during real use, on the
+empty-set edge case — exactly the input that testing on my own already-populated
+machines never exercised. And it failed at the deletion stage.
+
+**Root cause:** under `set -u` (unset-variable protection, itself a safety choice),
+bash 3.2 treats expanding an empty array `"${ARR[@]}"` as referencing an unbound
+variable. Newer bash doesn't. So the safety flag plus the old bash plus the empty
+edge case combined into a crash.
+
+**Fix:** guarded every array expansion with `${ARR[@]:+"${ARR[@]}"}` (nine sites).
+Added a CI check flagging unguarded expansions for review.
+
+**Silver lining:** it crashed *before* deleting anything — because the destructive
+work is staged after the confirmation and the loops are ordered defensively. The
+fail-safe design meant a bug at the delete stage lost no data.
+
+**Lesson:** test the empty set, the single element, and the "none found" path — not
+just the happy path with rich data. Edge cases are where security tools fail.
+
+---
+
+## Bug 5 — Double-NAT detector's false negative
+
+**Symptom:** the NAT check reported "single NAT, clean" on a network that showed
+two private-address hops in traceroute.
+
+**Root cause:** the logic counted private hops, but the home router often *doesn't
+answer* traceroute, so the count came up short and the tool declared all clear —
+another false negative. Separately, ISP-side CGNAT (100.64/10) looks like
+double-NAT but isn't the user's problem to fix.
+
+**Fix:** rewrote the logic to treat the local gateway as NAT layer one implicitly
+(answered or not), flag any *additional* private router as possible double-NAT, and
+special-case CGNAT as ISP-side. Also added the honest caveat that an
+IP-passthrough gateway can echo its private IP as a hop — so the tool tells the
+user how to *confirm* (check the router's WAN IP) rather than asserting a verdict.
+
+**Lesson:** absence of evidence isn't evidence of absence. A silent participant
+(the non-responding router) must be modeled, not assumed away. And when the tool
+can't be certain, it should say how to check — not guess.
+
+---
+
+## Bug 6 — CI was red, and the lint findings weren't all cosmetic
+
+**Symptom:** GitHub Actions failing on `main`. `shellcheck --severity=warning`
+returned eight findings across five scripts: five SC2034 (unused variable) and
+three SC2010 (`ls | grep`).
+
+**Why it mattered — the honest version:** most of these were not live bugs. Four
+unused colour variables hurt nobody. But a red CI badge is worse than the sum of
+its findings: it trains you to stop reading the build. The bash-3.2 gate and the
+destructive-confirmation guard — the two checks that exist *specifically* because
+Bugs 3, 4 and 5 happened — live in the same workflow. Once the run is red by
+default, a real regression in those gates arrives as "still red," and nobody
+looks. A muted alarm is the same failure mode as a false "all clear"; it just
+takes longer to bite.
+
+**Root cause, per finding:**
+
+- *SC2034, four colour variables* (`RED` in `check_updates.sh` and `neptune.sh`,
+  `CYN` in `redflag_scan.sh`): copy-paste drift. Every script starts from the same
+  colour-helper preamble, and each one uses a different subset.
+- *SC2034, `SUDO_NEEDED` in `audit_system.sh`*: a `check_plists()` parameter that
+  was never read in the function body. All three call sites dutifully passed the
+  literal `no`. An interface that was designed, never implemented, and never
+  noticed because the argument was always the same.
+- *SC2034, `SYSEXT` in `redflag_scan.sh`*: dead code with a sting in it. The
+  variable was assigned from a `systemextensionsctl` pipeline and then never read;
+  the check below re-runs the command independently. Harmless — but it meant a
+  chunk of filtering logic sat in the traffic-interception section looking load-
+  bearing while doing nothing. Dead code in a security scanner reads as coverage
+  you don't have.
+- *SC2010, three `ls | grep '\.app$'` sites* (`sentry.sh` snapshot, `uninstall.sh`
+  usage listing and fuzzy fallback): parsing `ls` output to enumerate
+  `/Applications`. The classic objection is filenames with spaces or newlines.
+
+**Fix:** removed the dead variables (each confirmed unused by grep first — no
+script sources another, so nothing consumed them externally), dropped the
+vestigial parameter and its three call-site arguments, and replaced the `ls`
+pipelines with plain globs guarded by `[ -e "$A" ] || continue` for the
+no-match case. bash 3.2 throughout: no `globstar`, no arrays, no `${var,,}`.
+Verified byte-identical output against the old pipelines for names containing
+spaces and quotes, for a no-match search term, and for an empty directory.
+
+**The one finding that wasn't cosmetic.** The fuzzy app-name fallback in
+`uninstall.sh` was:
+
+```bash
+MATCH=$(ls /Applications 2>/dev/null | grep -i "$APPNAME" | grep '\.app$' | head -1)
+```
+
+`grep` treats `$APPNAME` as a **regular expression**. `$APPNAME` is user input, and
+the value it resolves to flows onward into `find -iname`, `pkill -f`, and the
+deletion list. So `./uninstall.sh "."` matched the first app alphabetically rather
+than failing to find anything — and a term containing `*`, `[`, or `+` either
+errored or matched something the user didn't mean. The confirmation gate still
+stood between that and any deletion, which is exactly why this never became an
+incident. But "the safety net caught it" is not the same as "the input was
+handled correctly," and this is the destructive script. The replacement matches
+the term as a **literal substring** via a `case` pattern with the expansion
+quoted, so metacharacters are inert.
+
+**Lesson:** triage lint findings, don't batch-dismiss them. The instinct with a
+wall of style warnings is to silence the noisy ones and move on; seven of these
+eight genuinely were noise. The eighth was untrusted input reaching a regex on the
+path to `rm -rf`, wearing the same yellow SC2010 badge as a cosmetic `ls | grep`.
+The severity of a lint rule is a property of the rule. The severity of a *finding*
+is a property of where it sits in your blast radius — which the linter can't know
+and you can.
+
+**Second lesson, aimed at future me:** a green CI is a precondition for CI being
+useful at all, not a nice-to-have. Fix it the day it goes red.
+
+---
+
+## Bug 7 — The signature check that never read a signature
+
+**Symptom:** every signed item in every scan reported `(unknown)`. Splice,
+Docker, Zoom, Arturia, Pioneer, PACE — all of them, on every run, on every
+machine. `signed (unknown authority)` in `audit_system.sh`; `— unknown` in the
+listener table; `signed:unknown` for privileged helpers.
+
+I had read past it for a long time as a cosmetic wart.
+
+**Root cause:** `codesign -dv` does not print the certificate chain. It prints
+`Executable=`, `Identifier=`, `Format=`, `CodeDirectory`, `Signature size`, and
+`Timestamp` — and stops. `Authority=` lines only appear at verbosity 2. So every
+
+```bash
+AUTH=$(codesign -dv "$BIN" 2>&1 | grep -m1 '^Authority=' | cut -d= -f2)
+```
+
+matched nothing, always, and `${AUTH:-unknown}` did exactly what it was told.
+Six call sites across four scripts.
+
+**Why it was worse than cosmetic.** `sentry.sh` classifies Apple binaries like
+this:
+
+```bash
+case "$AUTH" in
+  "Software Signing"|"Apple Mac OS Application Signing") echo "apple" ;;
+  *) echo "signed" ;;
+esac
+```
+
+`AUTH` was always empty, so the first branch was **structurally unreachable**.
+Nothing was ever classified as Apple — `/bin/launchctl` came back "(unknown)"
+like everything else. The Apple-vs-third-party distinction, which is the
+difference between "the OS starts this" and "someone else starts this", had
+never once worked.
+
+Third consequence, and the one that finally gave it away: `check_updates.sh`
+skips Apple's own apps with `grep -q "Authority=Apple Root CA"`. That never
+matched either, so **Safari.app** sat in the list of "apps NOT managed by brew or
+the App Store — these rely on their own updaters." Safari is Apple's. Seeing that
+in a real report is what sent me back to `codesign`.
+
+**Fix:** `-dvv` at all six sites. Verified against a real bundle:
+
+```
+$ codesign -dv  /Applications/Splice.app 2>&1 | grep '^Authority='
+$ codesign -dvv /Applications/Splice.app 2>&1 | grep '^Authority='
+Authority=Developer ID Application: Distributed Creation Inc (9962T6AKMH)
+Authority=Developer ID Certification Authority
+Authority=Apple Root CA
+```
+
+**Lesson:** `PHILOSOPHY.md` claims this project does "persistence analysis —
+enumerating every macOS persistence vector and verifying each against code
+signatures." The enumeration was real. The verification was half-real: it could
+tell signed from unsigned, because `codesign -v` genuinely answers that, but the
+part that says *who* silently returned nothing from the day it was written.
+
+The tell was on screen the whole time. A field reading `(unknown)` for every row
+is not a formatting quirk — a value that is constant across all inputs is a value
+that isn't being computed. I had trained myself to skim past it because it looked
+like noise, which is the same reflex that makes a noisy scanner dangerous. See
+Bug 8.
+
+---
+
+## Bug 8 — The bugs were all in the reporting layer, not the collection layer
+
+**Symptom:** a full `./neptune.sh` run on a clean machine produced an action
+digest claiming 25 findings across ~45 lines, for about 18 real ones — with
+sentence fragments like `[XX] passthrough on the ISP gateway` listed as action
+items, every finding printed twice, and the numbering running 1., 10., 2., 3.
+
+**Why group these:** Neptune's *collection* was fine. It correctly found four
+unsigned launch items, two unsigned root helpers, a second private router, and a
+real latency problem. Every defect in this pass was downstream of that — in what
+gets counted, what gets surfaced, and what gets said when a check can't run. Four
+faults, one theme:
+
+**1. A finding prefix is load-bearing, so anything wearing one becomes a
+finding.** The digest matched `[0-9]+\. ` alongside the `[FLAG]`/`[!!]`/`[XX]`
+prefixes — but `1. `, `2. ` is how each scan numbers its *own* end-of-scan
+summary, which restates the same findings. So everything appeared twice, and
+`sort -u` then interleaved two scans' independent numbering into nonsense.
+Meanwhile `network_check.sh` explained double NAT with **seven consecutive
+`bad()` calls**, so one problem became seven findings and its prose became action
+items. Fixed by collecting prefixed lines only, and by letting continuation prose
+be continuation prose. One finding, one prefixed line.
+
+**2. A scanner that is 70% noise is a scanner you stop reading.** Seven of
+`sentry.sh`'s ten flags were `rapportd` and Splice holding different ports than
+at the last baseline. macOS reassigns ports in 49152–65535 every boot, so the
+port number is churn and the process plus interface scope is the signal. The
+baseline now records those as `:ephemeral`. Verified it still catches a new
+listening process, and still catches one moving from `[::1]` to `*` — the two
+things the check exists for. (Roadmap #5, and it turns out to be the difference
+between a flag list you read and one you skim.)
+
+**3. A check that could not run reported nothing at all.** The firewall check
+read `com.apple.alf globalstate`, which returns nothing on macOS 26.6.2, and fell
+through to an unprefixed `note` that the digest does not collect — while the RED
+FLAG SUMMARY went on to report an otherwise clean security baseline. A reader
+sees SIP enabled, Gatekeeper enabled, eight unrelated flags, and reasonably
+concludes the baseline was checked. A third of it wasn't. Now queries
+`socketfilterfw` first and, if every source is unreadable, says so as `[!!]`.
+
+**4. Two scans disagreed about the same file, in the same report.**
+`redflag_scan.sh` resolved plists naming a bare command (`launchctl`, `open`) via
+`command -v` and reported them fine. `audit_system.sh` lacked that step and
+called Apple's own `limit.maxfiles` and `limit.maxproc` orphaned plists. Both
+verdicts printed in the same combined report, pages apart.
+
+**Lesson, and it is the roadmap's:** the digest was built by grepping the scans'
+prettified human output. That interposes a parser — one whose input format was
+never specified — between "what was found" and "what was reported", and every
+fault above lives in that gap. Fixing the greps fixed these four instances. It
+did not close the gap.
+
+This is the concrete argument for the structured-findings work in `ROADMAP.md`,
+and it changes its shape: `--json` should not be a second output path bolted
+alongside the text report, because that leaves the parser in place and adds a
+second consumer that can disagree with the first. Findings should be recorded as
+structured records **at the point of discovery**, with both the human report and
+the JSON rendered from that one list. Then the digest is a filter over an array,
+and a summary that contradicts its own findings stops being expressible.
+
+The advisor loop needs that guarantee more than it needs JSON. A model reasoning
+over a view that can silently diverge from what the human sees is worse than no
+advisor at all.
+
+**Second lesson:** every bug in this pass was findable from fixture strings — a
+captured `codesign` block, a captured `lsof` block, a few lines of scan output.
+None needed a Mac. `ROADMAP.md` defers test fixtures as "non-trivial" because it
+frames them as mocking `launchctl`, `lsof` and `system_profiler`. The pure
+text-processing layer needs no mocks, and that is where the bugs actually were.
+
+---
+
+## Correction — a bug that did not exist, and how it nearly got shipped
+
+Not a bug in Neptune. A wrong diagnosis *about* Neptune that got as far as five
+commits, a CI gate, a rule in `CLAUDE.md` and a full devlog entry before it was
+caught. It is recorded here because this file claims every entry is a real issue,
+and an honest record that quietly drops its own worst moment is not honest.
+
+**The claim.** During the audit above, working with an AI assistant, a conclusion
+was reached that `neptune.sh`'s action digest and `redflag_scan.sh`'s
+system-proxy check were silently dead on macOS. The reasoning: both matched on
+`\s`, `\s` is a GNU extension, macOS ships BSD grep, and BSD treats `\s` as the
+literal letter *s*. Every finding Neptune prints is indented two spaces, so the
+digest would match nothing and the master runner would report "Nothing flagged
+anywhere. Fully clean run." on every machine, forever — Bug 1 reproduced one
+layer up, in the flagship script.
+
+It was a tidy story. It explained a real class of failure, it fit the project's
+stated worst-case, and it was completely wrong.
+
+**The evidence that "confirmed" it.** The claim was tested on a Linux box by
+*substituting* `s*` for `\s*` and showing the substituted pattern matched
+nothing. That demonstrates only: *if `\s` were treated literally, this would
+break.* It never tested whether `\s` is treated literally. The premise was
+assumed on the way in and the conclusion came back out wearing a test result's
+clothes.
+
+**What the target machine actually says:**
+
+```
+$ grep --version
+grep (BSD grep, GNU compatible) 2.6.0-FreeBSD
+
+$ printf '  [FLAG] test\n' | grep -E '^\s*\[FLAG\]'
+  [FLAG] test
+```
+
+Apple's grep is GNU-compatible and supports `\s`. Running `./neptune.sh` produced
+a fully populated digest. The digest had never been broken. Neither had the proxy
+check, nor the `\b` in the MacKeeper team-ID extraction.
+
+**What it cost.** Five commits, a CI gate enforcing a rule that wasn't needed, a
+`CLAUDE.md` constraint describing a platform that doesn't behave that way, and a
+ninety-line postmortem of an event that never happened. All retracted before
+anything was applied to the repository — but only because the diagnosis was
+accompanied by a five-second verification command, and that command was actually
+run instead of skipped as a formality.
+
+**Lessons, in order of importance:**
+
+1. **Verifying a simulation of your premise is not verifying your premise.** This
+   is the whole failure in one line. The test was constructed by assuming the
+   thing under test. It could only ever return "confirmed."
+2. **A diagnosis that explains your worst fear deserves more scrutiny, not less.**
+   "The digest has been silently reporting all-clear this whole time" is exactly
+   the narrative this project is primed to believe, because Bug 1 was real. That
+   made it land as obviously true rather than as a claim needing evidence.
+3. **Run the check on the target, not a model of the target.** Bug 3's lesson was
+   "works on my machine is a threat model failure when your machine isn't the
+   deployment target." This is the same lesson arriving from the opposite
+   direction, and it was in this very file, unread, the whole time.
+4. **Confident, fluent, well-structured reasoning is not evidence.** The wrong
+   diagnosis arrived with a mechanism, a worked example, a proposed fix, a CI
+   gate and a commit message. None of that is verification. It is worth being
+   deliberately more suspicious of a conclusion that arrives fully formed —
+   whether it came from a tool, a colleague, or yourself at 2am.
+
+**What was kept from the episode.** Nothing, in code. The `[[:space:]]` rewrites
+were discarded along with everything else, because keeping a change justified by
+a false premise means carrying a lie in the commit history. The real bugs found
+in the same pass — Bugs 7 and 8 — survived, because those were diagnosed from
+actual output captured on the actual machine.
+
+That is the difference the whole episode is about.
+
+---
+
+## Bug 9 — Three defects the verdict layer's first real run exposed
+
+The verdict layer shipped and was then run, for the first time, end to end on
+the machine it was written for. It worked: 17 findings, continuous numbering,
+real signers named where every line had previously read `(unknown)`, sentry down
+from 10 flags to 2. The interesting part is what a working run makes visible
+that no amount of reading the code had.
+
+### 9a — A finding that stopped mid-sentence
+
+**Symptom.** Item 15 of the digest:
+
+```
+   15. [network] Unprivileged view: your own processes only. Root-owned daemons are NOT
+```
+
+**Cause.** In `network_check.sh` the finding is one `warn` call whose sentence
+continues into the next line of output — a plain, unprefixed `echo`. That is the
+correct pattern for *printing* (Bug 8 established that a finding prefix marks a
+finding and elaboration must not carry one). But `record()` only ever sees the
+`warn` argument. In the scan's own output the paragraph reads fine; in the
+digest, where a finding is one line stripped of its context, it stops mid-clause.
+
+The CGNAT branch had the same shape and worse: two consecutive `warn` calls for
+one problem, recording it twice and recording the first half as its own fragment.
+That is Bug 8 again, surviving in a branch this machine does not take — which is
+why it was never seen.
+
+**Fix.** Each records one complete clause and continues in an unprefixed echo.
+
+**The durable part** is the test. It derives, per script, which helpers actually
+call `record()`, then fails if any of their titles ends on a word that cannot end
+an English sentence. The helper list is derived rather than hardcoded for a
+specific reason: `netcheck_plus.sh` has a `note()` that only echoes, so a
+hardcoded list would fail on that one and would miss whatever recording helper
+gets added next. The gate found the CGNAT pair on its first run — a bug in a code
+path the author's own machine cannot reach.
+
+It is a smell test, not a parser, and that is the right size for the problem. The
+defect was always obvious to a human reading one line out of context. CI is just
+the thing that does not get bored.
+
+### 9b — The tool billed the user for its own upgrade
+
+**Symptom.** Item 12, counted as a security notice, costing 4 points:
+
+```
+   12. [security] Baseline format changed (v1 -> v2); baseline REPLACED, nothing diffed this run
+```
+
+**Cause.** `BASELINE_FORMAT` bumped to 2 when sentry started collapsing ephemeral
+listener ports, so the old baseline was not comparable and was replaced rather
+than diffed — deliberate, and loudly announced on purpose, because a silent
+baseline reset is how a tripwire quietly stops being a tripwire. But it was
+emitted through `warn()`, and `warn()` records a `notice`, and a notice deducts.
+A machine with nothing wrong with it lost security points because Neptune had
+upgraded its own file format.
+
+**Fix.** A fourth severity, `info`: recorded like any other finding so `--json`
+and the printed report cannot disagree, rendered in its own block, deducting
+nothing and not entering the verdict.
+
+```
+  FOR INFORMATION — about this run, not about your machine (no score impact)
+    · [security] Baseline format changed (v1 -> v2); baseline REPLACED, nothing diffed this run
+```
+
+Unnumbered, because the numbers are the argument to `--acknowledge` and there is
+nothing here to acknowledge.
+
+**Lesson.** A score is a claim about the machine. The moment it also reflects
+things the tool did to itself, it stops being that claim, and the user is right
+to stop reading it. The category existed implicitly the whole time — "things the
+user should see that are not defects" — and went into the nearest bucket because
+no bucket fit.
+
+### 9c — The report contradicted itself about the user's own router
+
+**Symptom.** In one combined report, two minutes apart:
+
+```
+sentry.sh          Gateway 192.168.50.1: 38.555 ms
+network_check.sh   Gateway (192.168.50.1):  9.372 ms avg
+```
+
+**Cause.** Not a parsing bug and not a wrong number — both were accurate. sentry
+pinged 3 times, `network_check` pinged 5, they sampled different moments, and
+neither said so. On Wi-Fi one power-save wake-up moves a 3-ping average by 30 ms.
+It also means sentry's "LAN latency high" warning was firing off a sample too
+small to support the claim.
+
+**Fix.** A common 5-ping sample in both, and avg reported alongside worst:
+
+```
+  Gateway (192.168.1.1):  9.372 ms avg, 38.555 ms worst (5 pings)
+```
+
+Reporting max is the better output on its own merits — an average hides the one
+200 ms outlier that is the actual symptom of a bad mesh hop. Here it also turns
+the contradiction into the finding.
+
+**Lesson.** Two scans measuring the same thing must agree or explain themselves;
+a reader cannot distinguish "the link is variable" from "this tool is broken"
+when only one number is shown and the sample behind it is not stated. This is the
+same failure as Bug 7's cross-scan disagreement about `limit.maxfiles` — a
+different pair of scans, the same lost trust.
+
+**What the three have in common.** None was findable by reading the code, and all
+three were obvious within thirty seconds of reading real output. The verdict
+layer's value turned out to be partly diagnostic: compressing five scans into one
+screen put a fragment, a self-inflicted deduction and a contradiction next to
+each other where they could not be missed.
+
+---
+
+## Bug 10 — `--json` would have crashed on the very first finding
+
+**Symptom.** None, for weeks — because nobody ran the flag. Building the HTML
+report meant feeding the renderer a realistic findings file for the first time,
+and python stopped on line one:
+
+```
+UnicodeDecodeError: 'utf-8' codec can't decode bytes in position 360-361:
+invalid continuation byte
+```
+
+**Cause.** Every finding gets an acknowledge key: the title, lowercased, digits
+collapsed to `#`, truncated to 90 characters so it stays a manageable line in
+`~/.neptune/allow`. The truncation was `substr(key, 1, 90)`.
+
+`substr` in awk counts **bytes**. These titles are full of em-dashes, and an
+em-dash is three bytes (`\xe2\x80\x94`). Byte 90 landed in the middle of one,
+leaving a lone `\xe2\x80` in the record — a sequence that is not valid UTF-8.
+The awk that wrote it did not care. The python that read it back opened the file
+in text mode and died.
+
+The finding it happened on was not an edge case. It was item 1 of the real
+2026-09-18 report:
+
+```
+Unsigned process with network access: WavesLoca (pid 4500) — sig:UNSIGNED — outbound:3 — LISTENING on: ...
+```
+
+So `./neptune.sh --json` on the author's own machine, the machine every other
+bug in this log was found on, would have produced a traceback instead of a file.
+
+**Fix.** Two parts, doing different jobs.
+
+Cut back to the last space inside the 90 bytes. A space is ASCII, so a cut there
+can never land inside a character:
+
+```awk
+if (length(key) > 90) { key = substr(key, 1, 90); sub(/[^ ]*$/, "", key); sub(/ +$/, "", key) }
+```
+
+And read every record with `errors="replace"`, so a bad byte from an older
+`allow` file costs one garbled character in one field rather than the whole
+report. The first fix stops producing the problem; the second stops the reader
+being the thing that dies over it. Neither is a substitute for the other.
+
+**Verified on the target platform, not on a model of it.**
+
+The bug was found in a Linux container, and the DEVLOG already contains one
+entry about exactly that being insufficient — the `\s` episode, where a premise
+was "confirmed" by simulating it on the wrong platform and five commits were
+built on the result. awk is not one program. macOS ships BWK awk; the container
+ships something else; and whether `substr` counts bytes or characters is
+precisely the kind of thing that differs. If macOS awk counted characters, this
+truncation would never have split anything and the entry below would be
+describing a bug that does not exist on the machine Neptune runs on.
+
+So it was checked there, on macOS 26, before this was written:
+
+```
+$ printf 'x—y\n' | awk '{ print length($0) }'
+5
+$ printf 'x—y\n' | awk '{ print substr($0,1,2) }' | xxd | head -1
+00000000: 78e2 0a                                  x..
+$ awk --version
+awk version 20200816
+```
+
+`length` returns 5 for a three-character string, and `substr($0,1,2)` returns
+`78 e2` — the letter `x` followed by a lone `\xe2`, the first byte of an
+em-dash with its two continuation bytes cut off. That is the corruption, on the
+target platform, in two commands.
+
+The habit is cheap and the alternative has already cost this project five
+retracted commits: when a diagnosis depends on how a tool behaves, run the tool
+on the machine the claim is about.
+
+**Lessons.**
+
+1. **A flag nobody has run is not a feature, it is a claim.** `--json` had been
+   documented in the README, described in `docs/advisor.md`, and recommended as
+   the AI-advisor workflow. It had never once been executed against real
+   findings. Testing it took under a minute and found a total failure.
+2. **Byte-oriented tools and character-oriented tools meet at the file.** awk
+   counts bytes, python decodes characters, and the handoff between them is
+   where this lived. Any fixed-width truncation in a pipeline that eventually
+   hits a UTF-8 decoder is this bug waiting for a wide enough character — and
+   these reports are full of them, because the output style uses em-dashes
+   everywhere.
+3. **Write the test against the reproduction, not the fix.** `tests/unit.sh`
+   asserts both that the corrected key decodes *and* that the old byte-cut still
+   corrupts that exact title. Without the second half, a future change to the
+   fixture could make the test pass while testing nothing — which is the harness
+   failure from the Bug 8 pass, in a new costume.
+
+---
+
+## What the HTML report is for, and what it deliberately is not
+
+The verdict layer answered "is this machine OK?". The next honest question is
+"so what do I do?", and a findings list does not answer it. `--html` does:
+every finding opens into what it means in plain English, what to do, and the
+command to do it, labelled `reads only` / `changes a setting` / `installs or
+removes software` / `Neptune command`.
+
+Three constraints shaped it, and they are the interesting part.
+
+**Nothing is generated.** The remediation text is a table keyed by finding
+shape. Every command in it is one a person can look up in `man` or Apple's
+documentation, or is Neptune's own. No command is a pipeline or a chain — a
+rule `tests/unit.sh` asserts against the real table rather than trusting.
+Where there is no honest one-command answer, the entry says so: double NAT is a
+router setting, high Wi-Fi latency is physics, and a tool that invents a fix for
+those is a tool you stop believing about the ones it can fix.
+
+**One renderer.** `--json` and `--html` are the same python block. The
+remediation table would otherwise be the fourth thing in this project to exist
+in two copies and drift — after the digest that re-derived findings from prose
+(Bug 8), the scoring awk transcribed into the test file (now pinned by an
+assertion), and the two scans that disagreed about gateway latency (Bug 9c).
+
+**No JavaScript, no external stylesheet, no webfont, no image request.**
+Opening the report makes no network connections, and the whole file reads in a
+text editor. This is not minimalism for its own sake. Neptune's entire argument
+is that a security tool should be verifiable by the person running it; shipping
+its findings inside a document that phones a CDN on open would contradict that
+in the most literal way available. CI asserts it on every push.
+
+What it is *not*: an agent. The report ends by explaining how to hand the JSON
+to a model and what to constrain it to — recommend Neptune's own commands or
+documented single-purpose ones, never novel shell to paste unread — which is
+the same boundary `docs/advisor.md` draws. Observe, decide, act, with the human
+at the act boundary. The tool does not cross it on your behalf, and neither
+should anything you point at its output.
+
+---
+
+## Bug 11 — `./uninstall.sh Mail` would have taken MailMate with it
+
+**Symptom.** None, ever, on the author's machine — and that is the point of this
+entry. It was found by the first test ever written for the destructive scripts,
+within seconds of that test existing.
+
+**Cause.** File discovery matched the app name as a bare substring:
+
+```bash
+find "$DIR" -maxdepth 1 -iname "*${SHORTNAME}*"
+```
+
+For a fixture app called `Dovetail`, that selected for deletion:
+
+```
+~/Library/Preferences/com.acme.dovetailpro.plist     # a DIFFERENT app
+~/Library/Caches/com.acmecorp.dovetailer             # a different VENDOR
+```
+
+Translated to software people actually have: `./uninstall.sh Mail` selects
+MailMate's and Mailplane's data. `./uninstall.sh Notes` selects Notespark's.
+`./uninstall.sh Slack` is fine; `./uninstall.sh Box` is a disaster.
+
+Everything is shown before deletion, so a careful reader would catch it. But
+"the user will notice" is not a safety property, it is a hope — and the list on
+screen is long, the entries are cryptic Library paths, and the user has already
+decided to delete this app before they start reading.
+
+**Fix.** The term must match as a whole word: bounded at both ends by a
+non-alphanumeric character, or by the start or end of the filename. Every real
+shape still matches — `Dovetail`, `Dovetail Helper`, `com.acme.dovetail.plist` —
+while `dovetailpro` and `acmecorp.dovetailer` do not.
+
+Near misses are collected and displayed under their own heading rather than
+silently dropped. "The script considered this and excluded it" is information
+the person reviewing a delete list should have; quietly doing less than expected
+is its own kind of surprise, and it is the thing that makes people stop trusting
+a tool they cannot predict.
+
+**The actual lesson is about the test, not the bug.**
+
+Before this, the only automated check on the two scripts that run `rm -rf` as
+root was:
+
+```yaml
+- name: Verify destructive scripts still require confirmation
+  run: grep -qE 'read -r?.*\[y/N\]' "$f"
+```
+
+That verifies the safety gate exists. It says nothing whatsoever about what is
+behind the gate — and the risk in an uninstaller was never a missing prompt. It
+is a glob that matches one character too many. Every other part of Neptune had
+fixture tests; the only part that can destroy data had a grep for a prompt.
+
+Three things made the harness possible, and all three were worth having anyway:
+
+1. **`--dry-run`**, which prints the delete set and stops before the prompt and
+   before `sudo`. It is the exact opposite of a `--yes` flag — it lets you see
+   the blast radius without agreeing to it — which is why adding it to a
+   destructive script is safe where adding a skip-confirmation flag would not
+   be.
+2. **`NEPTUNE_ROOT`**, a prefix for every system path the scripts touch. It can
+   only narrow what they reach, and while it is set `sudo` is refused outright.
+   The harness points it at a temp directory holding a fake `/Applications`,
+   `/Library` and home.
+3. **A hostile fixture.** The decoys share the target's name as a substring, its
+   vendor, and its bundle-id prefix, because those are the three ways this goes
+   wrong. A fixture that cannot fail is decoration.
+
+The harness also asserts that a real sandboxed removal deletes exactly what the
+dry run listed — a dry run that disagrees with the delete stage would be worse
+than not having one — and it immediately found a hole in the containment guard
+written minutes earlier: a prefix check is not containment, because
+`$ROOT/../elsewhere` starts with `$ROOT/` and escapes it.
+
+Two defects, in two different pieces of code, from one afternoon of writing the
+test that should have existed first.
+
+---
+
+## What the vendor catalogue is, and the line it does not cross
+
+Eleven attention findings on a clean, working Mac; six of them Waves,
+Sonarworks, Docker and PACE/iLok shipping unsigned helpers. Every new user hits
+that wall on their first run with no way to tell "this vendor has always done
+this" from "something is wrong". `PHILOSOPHY.md` says a scanner you learn to
+ignore is worse than none, and an unexplained wall of red is how that happens.
+
+`scripts/vendor-quirks.tsv` names them: a pattern, a vendor, and one sentence
+about what the software does and why it looks like that.
+
+What it deliberately does **not** do is acknowledge them. The finding is still
+found, still listed, still counted, and still deducts from the score. The reason
+is the line this whole project is built along:
+
+> "Docker ships an unsigned root helper" is a fact about Docker.
+> "That is fine on my machine" is a judgement about your threat model.
+
+The first belongs in a shipped catalogue. The second does not, because the
+products Neptune was built to replace are precisely the ones that make it for
+you and hand back a clean bill of health. Acknowledging stays a deliberate act,
+one finding at a time, in a plain-text file you can read and edit.
+
+The bar for an entry is evidence, not plausibility: behaviour verified on a real
+machine, described rather than vouched for. No line in that file says any
+software is safe. CI asserts the format, that no entry is shadowed by a broader
+one listed earlier, and that a plausible-looking impostor
+(`com.evil.fakewaves`) gets no label.
+
+---
+
+## Bug 12 — two defects in the fix for Bug 10, both invisible on Linux
+
+Bug 10's fix was written and tested in a Linux container, where it passed. Run
+on macOS, the test file that proves it does not parse, and the fix itself prints
+warnings.
+
+### 12a — the test file was a syntax error on bash 3.2
+
+```
+./tests/unit.sh: line 336: unexpected EOF while looking for matching `'
+./tests/unit.sh: line 508: syntax error: unexpected end of file
+```
+
+**Cause.** A python heredoc inside command substitution:
+
+```bash
+PIPED=$(python3 - <<'ADV'
+    if any(ch in c for ch in ("|", ";", "&&", ">", "`", "$(")):
+ADV
+)
+```
+
+bash 3.2 scans a heredoc body for backticks and `$(` **even when the heredoc is
+already inside `$( )`**. The body here is python that merely *mentions* those
+characters — it is a list of shell metacharacters the test forbids in
+remediation commands — and that is enough. bash 5 parses it without complaint.
+
+This is the same family as the `case`-inside-`$()` trap already in CLAUDE.md:
+bash 3.2's command-substitution parser is not cleanly recursive. The fix is
+never a quoting trick; it is to get the construct out of `$( )`. The python now
+lives in `tests/command_safety.py`, matching `tests/advice_coverage.py`.
+
+**The worse part is how it failed.** A parse error takes the whole file down
+before any assertion runs, so `./tests/unit.sh | grep FAIL` printed *nothing*
+while the exit code was non-zero. A test file that exits non-zero with no
+failures reported is the harness bug from the Bug 8 pass wearing its third
+costume — after the 27 uncounted assertions and the CI gate that never fired.
+
+Two gates now exist, because neither alone is sufficient:
+
+* `bash -n` over `tests/*.sh`, not just `scripts/*.sh`. The old loop never
+  looked at the test files at all.
+* A grep for `$(` followed by `<<`, because `bash -n` **on the CI runner cannot
+  catch this** — bash 5 is happy with it. A syntax gate that runs on the wrong
+  bash is a syntax gate that passes.
+
+### 12b — the fix emitted parser warnings on every long finding
+
+```
+awk: towc: multibyte conversion failure on: '?'
+ input record number 1, file
+ source line number 2
+```
+
+**Cause.** The Bug 10 fix was "cut at byte 90, then trim back to the last
+space". The output is correct — the trim removes the broken bytes — but for one
+statement the string *is* invalid UTF-8, and macOS awk (20200816) warns the
+moment the next `sub()` touches it. Linux awk says nothing, so CI was silent.
+
+Correct output with a warning on stderr for every long finding. Not a crash,
+not wrong, just noise during a normal scan — and a scan that emits parser
+warnings is one people stop reading closely, which is this project's entire
+argument about alert fatigue applied to itself.
+
+**Fix.** Do not create the invalid intermediate at all. Build the key by
+concatenating whole words while the total stays under the limit:
+
+```awk
+nw = split(key, w, " ")
+key = w[1]
+for (i = 2; i <= nw; i++) {
+  cand = key " " w[i]
+  if (length(cand) > 90) break
+  key = cand
+}
+```
+
+Same answer, no slicing, nothing to warn about. A single word longer than the
+limit is kept whole: a slightly long key costs nothing, and cutting it is the
+bug.
+
+The test now asserts the builder writes **nothing to stderr**, and separately
+that the old slice-then-trim version is the one that warns — so the assertion
+is pinned to a reproduction rather than to a hope, and it cannot quietly stop
+testing anything.
+
+### The lesson, which is the same one three times now
+
+The `\s` retraction says: verifying a simulation of your premise is not
+verifying your premise. Bug 10's own entry says: a flag nobody has run is not a
+feature, it is a claim. This adds the third face of it — **a fix validated only
+on the development platform is a claim about the development platform.**
+
+Every one of these was found in seconds by running the thing on the machine it
+is for. Nothing clever was required. The cost each time was the gap between
+"tests pass" and "tests pass where it ships", and the only durable fix is to
+close that gap earlier, which is what the two new gates are for.
+
+---
+
+### Correction to 12b — it was not a warning
+
+12b above calls the `towc` message "noise during a normal scan". That was an
+understatement, and a probe on the target machine shows by how much:
+
+```
+$ awk 'BEGIN { print "before"; s = substr("x—y", 1, 2); sub(/q/, "r", s); print "after" }'
+before
+awk: towc: multibyte conversion failure on: '?'
+$ echo $?
+2
+```
+
+No "after". macOS awk does not warn and carry on — it **aborts the whole
+program** the moment a string function touches invalid UTF-8 in a UTF-8
+locale. The whole-word key builder removed the one place Neptune *created* such
+a string, which is why the test went quiet. It did nothing about the places
+where such strings *arrive* — which is Bug 13.
+
+---
+
+## The v1.0 pass — "look at everything"
+
+A full read of every scan and every path from a scan's `printf` to the verdict,
+asking one question of each: *what does this do when something goes wrong?*
+Six defects, and the first one is the reason this project exists.
+
+## Bug 13 — the silent all-clear, again
+
+**Symptom (constructed from the probe above, on the target awk).** Give the suite one process
+whose name contains a non-ASCII character near `lsof`'s 9-byte `COMMAND`
+cutoff — `Café Helper` is enough — and the report can read **HEALTHY** with
+zero findings.
+
+**Cause.** Three facts, each harmless alone:
+
+1. `lsof` truncates command names by **bytes**, so a name can be cut in the
+   middle of a character. Half a character is a normal input.
+2. macOS awk aborts on it (above).
+3. The scoring step ran as `awk '...' "$FINDINGS" 2>/dev/null | ... > scored`.
+
+So the awk that turned records into scores died on the first bad byte, its
+error went to `/dev/null`, the pipeline carried on with whatever it had written
+— possibly nothing — and **an empty findings list scored 100/100 across the
+board**. The runner had the same shape one level up: a missing scan printed
+"(skipping …)" and contributed nothing, and a scan that crashed half-way
+contributed half. Nothing anywhere distinguished "found nothing" from "could not
+look". That is Bug 1's failure — the false all-clear — reached by a completely
+different road.
+
+**Fix, in layers, because any one of them alone would be a hope:**
+
+- **Every script runs under `LC_ALL=C`.** In the C locale text is bytes; awk has
+  nothing to convert and nothing to abort on, BSD `sed`/`tr` stop throwing
+  "illegal byte sequence", and `length()`/`substr()` mean the same thing on the
+  Mac and on the Linux CI runner. The bytes pass through untouched, so the
+  terminal still shows em-dashes.
+- **The scorer proves it finished.** It writes a stats line — lines read,
+  valid, malformed, duplicates, written — *in awk's `END` block*. If awk dies,
+  there is no stats line. If the numbers do not add up, or there were zero
+  records, integrity is off, the verdict reads **INCOMPLETE — this is NOT a clean
+  bill of health**, and the exit code is 2.
+- **Malformed records become a finding** ("3 result lines could not be read"),
+  never a silent drop.
+- **The runner fails closed.** A scan that is missing, exits non-zero
+  (`PIPESTATUS`, since it runs through `tee`), or finishes having recorded
+  nothing becomes an `unknown` finding naming it.
+- **Every check records a `pass`.** So a report can say *what it covered*, and a
+  CI job can assert that a real run on real macOS checked every posture control.
+
+**Test.** `tests/unit.sh` feeds the real pipeline a title containing half an
+em-dash and asserts both records survive with nothing on stderr; feeds it
+nothing and asserts *incomplete*/exit 2; feeds it garbage and asserts an unknown.
+`tests/macos.sh` re-runs the abort probe on the CI Mac so the reason for the
+rule is re-proven on every build.
+
+**Lesson.** `2>/dev/null` on a step whose *output is the verdict* is not error
+handling; it is deciding in advance that errors mean "all clear". Suppress
+stderr on probes whose failure you handle; never on the thing that decides.
+
+## Bug 14 — `--acknowledge 5` acknowledged a different finding than the one you read
+
+**Cause.** `--acknowledge` ran **a fresh full scan** and resolved `5` against
+*that* run's numbering. Findings come and go between runs — a process exits, an
+update lands — so item 5 of the list on your screen could be item 4 or 6 of the
+new one. It also wrote to the allowlist without showing what it had resolved
+the number to. Silencing the wrong alert, quietly, is the failure this whole
+project is about.
+
+**Fix.** The numbered list is written once per run to
+`~/.neptune/last-listing.tsv`, and the terminal, the HTML report and
+`--acknowledge` all read that file. Acknowledging no longer scans at all: it
+shows the findings the numbers resolve to, *from the run you read*, and asks.
+
+**Test.** A temporary `HOME` with a saved listing: item 2's key must be what
+lands in the allowlist; `99` exits 64; declining changes nothing.
+
+## Bug 15 — two checks that could never fire
+
+- **Browser extensions.** The Chrome check ran `find … -maxdepth 4` for
+  `manifest.json`. Manifests live at `<profile>/Extensions/<id>/<version>/`,
+  which is depth 5. The section of every report was a heading with nothing under
+  it — and "no risky extensions" is what that looked like. It is now a small
+  python parser (`neptune_inspect.py`) that walks every Chromium-family browser
+  and profile, resolves `__MSG_` names from `_locales`, and flags only the two
+  permissions that can see or reroute everything (`proxy`, `debugger`).
+- **Bufferbloat (`netcheck_plus.sh --load`).** It downloaded a test file from a
+  host that no longer serves it, with `curl -s` in the background and no check
+  on the result. The "load" never loaded anything, so the test compared idle
+  latency with idle latency and reported **no bufferbloat**. It now uses
+  Cloudflare's speed-test endpoint, records how many bytes arrived, and refuses
+  to report a result under 1 MB.
+
+Both are the same shape as Bug 13 at the scale of one check: a measurement that
+did not happen, reported as a measurement that came back clean.
+
+## Bug 16 — ad-hoc signed was scored as "signed"
+
+`sig()` asked `codesign -v` (valid?) and then took the first `Authority=` line.
+An **ad-hoc** signature — valid, but naming no one — has no `Authority` line, so
+it fell through as `signed:` with an empty signer, and passed.
+
+On Apple silicon every executable must carry at least an ad-hoc signature, and
+anyone can make one with `codesign -s -`. It proves the file has not changed
+since signing and nothing about who wrote it. Commodity Mac malware ships
+exactly like that, which makes this the one signing state a persistence audit
+most needs to see.
+
+**Fix.** Five classes: `apple`, `signed:<developer>`, `adhoc`, `unsigned`,
+`missing`. `Signature=adhoc`, or a valid signature with no authority at all, is
+`adhoc`, and ad-hoc persistence, helpers and listeners are findings. Homebrew's
+binaries are ad hoc too, so `homebrew.mxcl.*` gets a vendor label saying so —
+still found, still counted.
+
+**Test.** Both copies of `sig()` (sentry and redflag) against captured output
+for every class, and on macOS against a binary the CI job signs ad hoc itself.
+
+## Bug 17 — one problem, several findings
+
+The 2026-09-18 run lists Docker's root helper twice (as launchd persistence and
+as a privileged helper), the Waves licence server four times (a networked
+process, a launch agent, and two listener lines for `127.0.0.1` and `[::1]`),
+and the double NAT twice (from `sentry.sh` and from `network_check.sh`). Each
+copy deducted. Eleven "attention" items were really about five things.
+
+**Fix.** In the suite (`NEPTUNE_SUITE=1`), a check two scans can both do is done
+once, by the scan that owns it. Within `redflag_scan.sh`, a binary already
+flagged is not flagged again under another heading, and a listener's addresses
+are reported together. Exact duplicate records are dropped by the scorer and
+counted in its stats.
+
+## Bug 18 — a bloat score that could not move
+
+The sample report shows 3.5 GB of Homebrew downloads and another 4–5 GB of
+other caches, and a bloat score of **100/100**. `audit_system.sh` printed its
+disk listings but **recorded nothing**, so the category had no inputs. Its one
+would-be finding had its own bug: third-party kexts were found with
+`kextstat | grep -v com.apple`, which also lets `kextstat`'s column header
+through — recording that would have been a false finding on every Mac.
+
+**Fix.** Caches, Homebrew's cache, regenerable developer data and logs are
+measured with `du -sk` (integers in every locale; `du -h` prints `3,5G` under
+some) against stated thresholds and recorded — with the pass recorded too. Kexts
+are counted from data rows only. And `clean_caches.sh` exists, so a bloat
+finding has an answer that is not "delete things by hand".
+
+## Bug 19 — a comment broke the cache cleaner on bash 3.2
+
+Found before release, by building bash 3.2.57 from Apple's own source
+(`apple-oss-distributions/bash`, tag bash-131) and running every suite under it.
+The unit tests passed. The blast-radius harness did not: five cache-cleaner
+assertions failed, and the script said *"No third-party cache over 1 MB —
+nothing worth clearing"* on a fixture with three.
+
+**Cause.** The inventory loop ran inside `<( … )`, and it carried a comment
+explaining why it avoided `case` — with `case` in backticks. bash 3.2 does not
+parse a substitution's body when it reads the script; it re-scans the text
+when the substitution **runs**, and it counts backticks while doing so,
+comments included. One pair of backticks was enough for
+`bad substitution: no closing ')'`. `bash -n` — on bash 5 *and* on bash 3.2 —
+passes the file, because the error only exists at run time.
+
+**The failure mode is the one this project keeps meeting.** The producer died;
+the `while read` consuming it saw an empty stream; an empty stream looked like a
+clean machine. It failed *safe* (nothing was deleted) but it failed *silent*,
+and "nothing to clean" from a cleaner is the all-clear in another costume.
+
+**Fix.** The inventory is now a function writing to a temp file; if producing
+it fails, the script stops and says so. And a new gate,
+`tests/bash32_gate.py`, walks every `$(` and `<(` with a quote-aware scanner and
+reports a `case`, a heredoc, or **any backtick** inside — the multi-line cases
+the old one-line greps could not see. It found exactly this one instance in the
+tree. The macOS CI job runs the real `/bin/bash` 3.2 as well.
+
+**Lesson.** A comment is code to bash 3.2's substitution parser. And the
+fourth version of the same rule: *the platform the tests pass on is the only
+platform they have proven anything about.*
+
+## Bug 20 — macOS 26 renamed Apple's signing certificate
+
+The first 1.0 run on the development Mac (macOS 26.6.2) labelled `launchd`,
+`/usr/bin/open` and every other Apple binary `signed:macOS Software Signing` —
+a third-party developer called "macOS Software Signing". `sig()` recognised
+Apple by the leaf certificate's name, `Software Signing`, and macOS 26 calls it
+`macOS Software Signing`.
+
+Nothing was *missed* — an identified developer passes too — but the
+classification was wrong, and one consumer depended on it: `check_updates.sh`
+listed **Safari** among "apps nothing updates for you". Both names are now
+Apple, the app inventory identifies Apple's apps by bundle id first, and there
+is a fixture with the new name. `tests/macos.sh` already asserts that
+`/bin/ls` classifies as `apple` on the CI runner, so the next rename fails a
+build instead of a report.
+
+## Bug 21 — two all-clear lines that the same run contradicted
+
+Also from that run:
+
+- **"Every listening process is signed by Apple or an identified developer"**
+  printed directly under WavesLocalServer — unsigned, listening on
+  `127.0.0.1:6985`. The listener check skipped binaries already reported as
+  persistence (the Bug 17 de-duplication) and forgot to count them as problems,
+  so the pass line fired. The helper check had been fixed for exactly this; the
+  listener check had not. It now counts them and prints the skip as a note, not
+  as `[ok]`.
+- **A baseline diff with only removals recorded nothing** — no pass, no note —
+  so the change-detection check silently dropped out of the report's coverage.
+  "Nothing new" is now the pass, and removals are recorded as information.
+
+Same lesson as Bug 13 at the scale of one line: a sentence that says "all
+clear" has to be computed from the same facts as the findings beside it.
+
+### What this pass changed about the tests
+
+Every earlier test of the pipeline tested a **transcription** of it: the scoring
+awk copied into `tests/unit.sh`, a remediation table extracted from between two
+marker comments and `exec()`'d. One transcription had drifted. Now the scripts
+keep their pure functions above a `NEPTUNE_LIB=1` guard, the tests source the
+shipping files and call them, and the renderer is a python module the tests
+import. And there is a macOS CI job that runs all of it under `/bin/bash` 3.2
+and BWK awk, then runs the real suite on the runner and checks what the report
+says about itself.
+
+---
+
+## Cross-cutting practices that came out of these
+
+- **CI as a regression net for exactly these bugs.** Linux runs shellcheck,
+  `bash -n`, grep gates for the bash 3.2 traps, destructive-script guardrails,
+  and every test suite. A macOS job reruns the suites under `/bin/bash` 3.2 and
+  BWK awk and performs a real end-to-end run. The bugs found by hand can't
+  silently come back, and the ones that only exist on the target platform are
+  now tested on it.
+- **Fail closed, everywhere.** An unknown is never a pass; an error path never
+  falls through to "ok"; a step whose output is the verdict never has its
+  errors thrown away.
+- **Calibration over alarmism.** Legitimate vendor software (Waves, Sonarworks,
+  Docker, PACE/iLok) fails code-signing checks routinely. Rather than flag-spam,
+  Neptune labels these as expected quirks and teaches the user to spot what's
+  *beyond* the known-good set. A scanner you learn to ignore is worse than none.
+- **Fail-safe defaults.** Read-only unless explicitly told otherwise; sudo cached
+  once, never run-as-root wholesale; confirmation before every deletion; verify
+  after every removal.
+- **Real-world validation.** Every script was run on multiple live machines
+  (including a non-technical user's), which is where Bug 4 surfaced. Lab-only
+  testing would have shipped it.
+
+## Where it's going
+
+See `ROADMAP.md`. The next gap is login items registered through
+`SMAppService`, which live in the Background Task Management database rather
+than a `LaunchAgents` folder — and the rule for it is the one this log keeps
+relearning: capture real output from a real machine first, write the parser
+against the fixture second.

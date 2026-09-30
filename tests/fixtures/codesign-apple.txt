@@ -1,0 +1,8 @@
+Executable=/bin/launchctl
+Identifier=com.apple.launchctl
+Format=Mach-O universal (x86_64 arm64e)
+CodeDirectory v=20400 size=1337 flags=0x0(none) hashes=40+7 location=embedded
+Signature size=4442
+Authority=Software Signing
+Authority=Apple Code Signing Certification Authority
+Authority=Apple Root CA

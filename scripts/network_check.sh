@@ -4,7 +4,7 @@
 #
 # Read-only. Checks:
 #   1. Local network identity (IP, gateway, Wi-Fi vs Ethernet)
-#   2. Double-NAT detection (your old nemesis)
+#   2. Double-NAT detection (two routers translating addresses in series)
 #   3. DNS configuration + resolution speed
 #   4. Latency baseline (gateway vs internet) — the bufferbloat precondition
 #   5. Per-app connection census — what's actually using your network right now
@@ -12,6 +12,7 @@
 # Usage: chmod +x network_check.sh && ./network_check.sh
 
 set -u
+export LC_ALL=C   # byte-safe text tools on macOS — see the note in neptune.sh
 
 BOLD=$(tput bold 2>/dev/null || true)
 RED=$(tput setaf 1 2>/dev/null || true)
@@ -21,9 +22,24 @@ CYN=$(tput setaf 6 2>/dev/null || true)
 RST=$(tput sgr0 2>/dev/null || true)
 
 section() { echo; echo "${BOLD}${CYN}== $* ==${RST}"; }
-ok()   { echo "  ${GRN}[ok]${RST} $*"; }
-warn() { echo "  ${YEL}[!!]${RST} $*"; }
-bad()  { echo "  ${RED}[XX]${RST} $*"; }
+# Structured finding records — see sentry.sh for the rationale. No-op unless
+# neptune.sh sets NEPTUNE_FINDINGS, so a standalone run is unchanged.
+SCAN=network
+CATEGORY=network
+CHECK=""
+record() {
+  [ -n "${NEPTUNE_FINDINGS:-}" ] || return 0
+  printf '%s|%s|%s|%s|%s\n' "$1" "$CATEGORY" "$SCAN" "$CHECK" \
+    "$(printf '%s' "$2" | tr '|\t\n' '/  ')" >> "$NEPTUNE_FINDINGS"
+}
+
+ok()      { echo "  ${GRN}[ok]${RST} $*"; }                       # prints only
+pass()    { echo "  ${GRN}[ok]${RST} $*"; record pass "$*"; }     # a check that ran clean
+warn()    { echo "  ${YEL}[!!]${RST} $*"; record notice "$*"; }
+bad()     { echo "  ${RED}[XX]${RST} $*"; record attention "$*"; }
+unknown() { echo "  ${YEL}[!!]${RST} $*"; record unknown "$*"; }
+info()    { echo "  ${YEL}[!!]${RST} $*"; record info "$*"; }
+
 
 is_private() {
   case "$1" in
@@ -33,6 +49,24 @@ is_private() {
     *) return 1 ;;
   esac
 }
+
+# ---------------------------------------------------------------------------
+# Sourced by tests/unit.sh to exercise the pure functions above against
+# captured fixtures, without running a scan or touching the system. Nothing
+# below this line executes when NEPTUNE_LIB=1.
+#
+# Those functions are where the real bugs lived (DEVLOG Bugs 5 and 7), and they
+# need no macOS to test — only saved command output.
+# ---------------------------------------------------------------------------
+[ "${NEPTUNE_LIB:-}" = "1" ] && return 0
+
+PUBLIC_IP=false
+[ "${1:-}" = "--public-ip" ] && PUBLIC_IP=true
+
+# Same guard the other scripts carry (CLAUDE.md constraint 5).
+if [ "$(id -u)" -eq 0 ]; then
+  echo "Run as your normal user, not with sudo."; exit 1
+fi
 
 echo "${BOLD}Network check — $(date '+%Y-%m-%d %H:%M')${RST}"
 
@@ -49,8 +83,19 @@ echo "  Interface:  ${IFACE:-?} $(networksetup -listallhardwareports 2>/dev/null
 echo "  Local IP:   ${LOCALIP:-?}"
 echo "  Gateway:    ${GATEWAY:-?}"
 
-PUBIP=$(curl -s --max-time 5 https://api.ipify.org 2>/dev/null || echo "?")
-echo "  Public IP:  $PUBIP"
+# Opt-in. This was unconditional, and neptune.sh runs this script as part of the
+# standard suite — so every `./neptune.sh` made a third-party request. CLAUDE.md
+# constraint 4 permits network use only where it is OPTIONAL, and a tool that
+# advertises "no telemetry" should not quietly contact anyone by default. It
+# also kept your public IP out of nothing: the value lands in the Desktop report
+# the README tells you to copy and paste for review.
+PUBIP=""
+if $PUBLIC_IP; then
+  PUBIP=$(curl -s --max-time 5 https://api.ipify.org 2>/dev/null || true)
+  echo "  Public IP:  ${PUBIP:-<lookup failed>}   (queried api.ipify.org)"
+else
+  echo "  Public IP:  not checked — re-run with --public-ip to ask api.ipify.org"
+fi
 
 ############################################################
 # 2. Double-NAT detection
@@ -77,19 +122,30 @@ for H in $HOPS; do
 done
 echo "  First hops:$HOPLIST"
 
-if [ -z "$EXTRA_PRIV" ] && [ -z "$CGNAT" ]; then
-  ok "Single NAT — only your router in the private path. Clean."
+CHECK=double-nat
+if [ -z "$HOPLIST" ]; then
+  unknown "Double-NAT check could not run: traceroute returned no hops"
+elif [ -z "$EXTRA_PRIV" ] && [ -z "$CGNAT" ]; then
+  pass "Single NAT — only your own router is in the private path"
 elif [ -n "$CGNAT" ] && [ -z "$EXTRA_PRIV" ]; then
-  warn "CGNAT hop detected ($CGNAT) — your ISP NATs upstream. Not fixable on"
-  warn "your end; only matters for inbound connections/port forwarding."
+  # One finding, one record. This was two warn calls, which recorded the same
+  # problem twice and recorded the first half as its own sentence fragment.
+  pass "Single NAT on your side — only your own router is in the private path"
+  CHECK=cgnat
+  info "CGNAT hop detected ($CGNAT) — your ISP translates addresses upstream, which is not fixable on your end"
+  echo "       It only matters for inbound connections and port forwarding."
 else
+  # ONE finding, then unprefixed continuation lines. The explanation used to be
+  # seven consecutive bad() calls, so the old digest counted seven findings for
+  # one problem and scattered sentence fragments through the action list. Every
+  # prefixed line is a recorded finding; prose that elaborates must not carry one.
   bad "SECOND PRIVATE ROUTER in path:$EXTRA_PRIV (beyond your gateway ${GATEWAY:-?})"
-  bad "This usually means double NAT: ISP gateway in router mode in front of"
-  bad "your mesh. BUT ISP boxes in IP-passthrough mode can still echo their"
-  bad "private IP as a hop. Definitive test: check your router's WAN IP —"
-  bad "  public IP ($PUBIP) shown  -> passthrough working, you're fine"
-  bad "  192.168.x / 10.x shown    -> double NAT is real; enable bridge/IP-"
-  bad "                               passthrough on the ISP gateway"
+  echo "       This usually means double NAT: an ISP gateway in router mode in front of"
+  echo "       your own router. BUT ISP boxes in IP-passthrough mode can still echo their"
+  echo "       private IP as a hop. Definitive test: check your router's WAN IP —"
+  echo "         your public IP${PUBIP:+ ($PUBIP)} shown -> passthrough working, you're fine"
+  echo "         192.168.x / 10.x shown    -> double NAT is real; enable bridge/IP-"
+  echo "                                      passthrough on the ISP gateway"
 fi
 
 ############################################################
@@ -100,47 +156,95 @@ section "DNS"
 DNS_SERVERS=$(scutil --dns 2>/dev/null | awk '/nameserver\[/{print $3}' | sort -u | tr '\n' ' ')
 echo "  Servers: $DNS_SERVERS"
 case "$DNS_SERVERS" in
-  *"$GATEWAY"*) echo "  (Router is your resolver — normal for mesh setups; the ASUS forwards upstream)" ;;
+  *"$GATEWAY"*) echo "  (Your router is the resolver — normal for home networks; it forwards upstream)" ;;
 esac
 
-# Resolution timing (3 lookups, uncached domains vary)
-for D in apple.com anthropic.com ableton.com; do
+# Three lookups, counted: DNS that answers nothing is a finding, not a timing.
+CHECK=dns
+DNS_OK=0
+for D in apple.com example.com cloudflare.com; do
+  ANS=$(dscacheutil -q host -a name "$D" 2>/dev/null)
   T=$( { time dscacheutil -q host -a name "$D" >/dev/null; } 2>&1 | awk '/real/{print $2}')
-  echo "  Resolve $D: ${T:-?}"
+  case "$ANS" in *address:*) DNS_OK=$((DNS_OK + 1)); echo "  Resolve $D: ${T:-?}" ;;
+                 *)          echo "  Resolve $D: NO ANSWER" ;; esac
 done
+if [ "$DNS_OK" -eq 3 ]; then
+  pass "DNS resolves (3 of 3 test lookups answered)"
+elif [ "$DNS_OK" -gt 0 ]; then
+  warn "DNS is unreliable ($DNS_OK of 3 test lookups answered)"
+else
+  bad "DNS is not resolving (0 of 3 test lookups answered)"
+fi
 
 ############################################################
 # 4. Latency baseline
 ############################################################
 section "Latency (idle baseline)"
 
+# min/avg/max/stddev — field 5 is avg, field 6 is max. Report both: an average
+# hides the one 200ms outlier that is the actual symptom of a bad mesh hop, and
+# it is why this scan and sentry.sh could print different latencies for the same
+# router in the same report and look like they disagreed. They sample different
+# moments; showing the spread makes that legible instead of suspicious.
+rtt() { ping -c 5 -q "$1" 2>/dev/null | awk -F/ '/round-trip|rtt/{print $5, $6}'; }
+
+CHECK=gateway-latency
 if [ -n "${GATEWAY:-}" ]; then
-  GW_PING=$(ping -c 5 -q "$GATEWAY" 2>/dev/null | awk -F/ '/round-trip|rtt/{print $5}')
-  echo "  Gateway ($GATEWAY):  ${GW_PING:-?} ms avg"
+  GW_RTT=$(rtt "$GATEWAY")
+  GW_PING=$(printf '%s' "$GW_RTT" | awk '{print $1}')
+  GW_MAX=$(printf  '%s' "$GW_RTT" | awk '{print $2}')
+  echo "  Gateway ($GATEWAY):  ${GW_PING:-?} ms avg, ${GW_MAX:-?} ms worst (5 pings)"
   if [ -n "${GW_PING:-}" ] && awk "BEGIN{exit !($GW_PING > 10)}"; then
-    warn "Gateway latency over 10ms on your own LAN — if this is Wi-Fi, check mesh"
-    warn "node placement/backhaul; if Ethernet, that's unusual."
+    warn "Gateway latency over 10ms on your own LAN (${GW_PING} ms average over 5 pings)"
+    echo "       On Wi-Fi this is usually the path, not the Mac: a mesh node that reaches"
+    echo "       the main router over a WIRELESS backhaul adds a radio hop each way."
+    echo "       Cable the nodes together (Ethernet backhaul) or move this Mac closer to"
+    echo "       the main router. On Ethernet, 10ms to your own router is unusual."
+  elif [ -n "${GW_PING:-}" ]; then
+    pass "Gateway latency is healthy (${GW_PING} ms average over 5 pings)"
+  else
+    unknown "Gateway latency could not be measured (no ping reply from $GATEWAY)"
   fi
+else
+  unknown "No default gateway found, so gateway latency could not be measured"
 fi
 
-NET_PING=$(ping -c 5 -q 1.1.1.1 2>/dev/null | awk -F/ '/round-trip|rtt/{print $5}')
-echo "  Internet (1.1.1.1):  ${NET_PING:-?} ms avg"
+NET_RTT=$(rtt 1.1.1.1)
+NET_PING=$(printf '%s' "$NET_RTT" | awk '{print $1}')
+NET_MAX=$(printf  '%s' "$NET_RTT" | awk '{print $2}')
+echo "  Internet (1.1.1.1):  ${NET_PING:-?} ms avg, ${NET_MAX:-?} ms worst (5 pings)"
 
 echo
 echo "  ${BOLD}Bufferbloat note:${RST} the numbers above are IDLE latency. Bufferbloat only"
 echo "  shows up UNDER LOAD. To test properly, run the Waveform bufferbloat test"
 echo "  (search 'waveform bufferbloat') in a browser — it measures latency during"
-echo "  saturated up/download and grades A-F. If it grades C or worse, enable"
-echo "  QoS/'Adaptive QoS' on the ASUS — that's the fix."
+echo "  saturated up/download and grades A-F. If it grades C or worse, turn on"
+echo "  your router's smart queueing / QoS (ASUS: Adaptive QoS; eero, Google, Ubiquiti: Smart Queue / SQM) — that's the fix."
+echo "  Or measure it here: ./netcheck_plus.sh --load"
 
 ############################################################
 # 5. Connection census — what's using the network right now
 ############################################################
 section "Active connections by app"
 
+# Deliberately NOT sudo. This script elevates nowhere else, and prompting for a
+# password to list connections is a poor trade for a quick network check. The
+# consequence is real and must be stated rather than left for the reader to
+# discover: without root, lsof sees only THIS user's processes.
 lsof -i -P -n 2>/dev/null | awk '$NF=="(ESTABLISHED)" {print $1}' | sort | uniq -c | sort -rn | head -15 | \
   awk '{printf "  %4d  %s\n", $1, $2}'
 
+echo
+# The recorded title must stand alone. This finding used to read "...daemons
+# are NOT" in the master digest, because the sentence continued into a separate
+# unprefixed echo that record() never saw. A finding is only as good as the one
+# line a reader sees out of context.
+# A note about how this scan ran, not about the machine — so it is info and costs
+# no points. It used to be a notice, which deducted from the network score for
+# describing its own method.
+CHECK=connections-view
+info "Unprivileged view: only your own processes are listed here; root-owned daemons are not covered by this scan"
+echo "       sentry.sh and redflag_scan.sh elevate and do cover them."
 echo
 echo "  High counts are normal for browsers and sync apps (Chrome, MEGAsync, Slack)."
 echo "  What deserves a second look: apps you are NOT actively using holding many"
@@ -148,3 +252,4 @@ echo "  connections, or names you don't recognize at all."
 
 echo
 echo "${BOLD}Check complete.${RST} Read-only — nothing was changed."
+exit 0

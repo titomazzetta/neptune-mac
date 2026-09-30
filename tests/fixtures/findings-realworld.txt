@@ -1,0 +1,7 @@
+attention|security|sentry|Unsigned process with network access: SoundID (pid 4574)
+attention|security|redflag|UNSIGNED persistence: com.waves.wls.agent runs /Library/Application Support/Waves
+attention|security|redflag|UNSIGNED privileged helper (runs as root): /Library/PrivilegedHelperTools/com.docker.socket
+attention|network|network|SECOND PRIVATE ROUTER in path: 192.168.1.254
+unknown|security|redflag|Application firewall state COULD NOT BE DETERMINED
+notice|network|network|Gateway latency over 10ms on your own LAN (11.350 ms)
+notice|maintenance|updates|Outdated formulae:

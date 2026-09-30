@@ -1,78 +1,109 @@
 name: CI
 
+# Every job is read-only against the repository and pinned to a full commit
+# SHA: a tag can be moved to point at different code, a SHA cannot. Dependabot
+# (.github/dependabot.yml) proposes SHA bumps, so pinning does not mean rotting.
+
 on:
   push:
     branches: [ main ]
   pull_request:
-    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   lint:
-    name: ShellCheck + syntax + bash 3.2 compat
+    name: Lint + portable tests (Linux)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install shellcheck
-        run: sudo apt-get update && sudo apt-get install -y shellcheck
+        run: sudo apt-get update -q && sudo apt-get install -y -q shellcheck
 
-      - name: Syntax check (bash -n) all scripts
+      # One entry point, identical to what a contributor runs locally: syntax,
+      # shellcheck, the bash 3.2 grep gates, destructive-script guardrails,
+      # python tests, blast radius, unit tests.
+      - name: tests/lint.sh
+        run: ./tests/lint.sh
+
+  workflows:
+    name: Lint the workflows themselves
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: actionlint (pinned version, built from source)
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -color
+      - name: Every action is pinned to a full commit SHA
         run: |
-          fail=0
-          for f in scripts/*.sh; do
-            if bash -n "$f"; then
-              echo "  ok  $f"
-            else
-              echo "FAIL  $f"; fail=1
-            fi
-          done
-          exit $fail
+          if grep -nE '^\s*-?\s*uses:\s*[^ ]+@' .github/workflows/*.yml \
+               | grep -vE '@[0-9a-f]{40}( |$)'; then
+            echo "ERROR: action referenced by tag or branch, not by commit SHA"; exit 1
+          fi
+          echo "ok: all actions pinned"
 
-      - name: ShellCheck all scripts
-        run: shellcheck --shell=bash --severity=warning scripts/*.sh
+  macos:
+    name: macOS — bash 3.2, BWK awk, and a real run
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - name: Guard against bash 3.2 incompatibilities
+      # The Linux job cannot prove the platform assumptions; this one can.
+      - name: Platform assumptions (bash 3.2, BWK awk, codesign, PlistBuddy)
+        run: /bin/bash tests/macos.sh
+
+      - name: Unit tests under /bin/bash 3.2 and BWK awk
+        run: /bin/bash tests/unit.sh
+
+      - name: Blast radius under /bin/bash 3.2
+        run: /bin/bash tests/blast_radius.sh
+
+      - name: Renderer tests with the system python
+        run: python3 tests/test_render.py
+
+      # The whole suite, for real, on the runner — then check what the report
+      # says about itself: every scan completed, nothing was lost, every posture
+      # control was checked, the exit code matches the verdict. It does NOT
+      # assert the runner is healthy; a CI image is whatever it is.
+      - name: End-to-end run (sanitized)
+        id: e2e
         run: |
-          # These patterns silently break on macOS's bash 3.2. Fail the build
-          # if any appear, so a contributor/agent can't reintroduce them.
-          fail=0
+          set +e
+          OUT="$RUNNER_TEMP/neptune-report"
+          ./scripts/neptune.sh --html --json --sanitize --out "$OUT"
+          echo "rc=$?" >> "$GITHUB_OUTPUT"
+          echo "out=$OUT" >> "$GITHUB_OUTPUT"
 
-          # 'case' inside $(...) command substitution — 3.2 parser bug
-          if grep -nE '\$\([^)]*\bcase\b' scripts/*.sh; then
-            echo "ERROR: 'case' inside \$() command substitution (breaks bash 3.2)"; fail=1
-          fi
-
-          # Unguarded empty-array expansion under set -u:  "${ARR[@]}" without :+
-          # Heuristic: flag "${...[@]}" NOT using the :+ guard, for review.
-          if grep -nE '"\$\{[A-Za-z_][A-Za-z0-9_]*\[@\]\}"' scripts/*.sh \
-               | grep -v ':+'; then
-            echo "WARN: possible unguarded empty-array expansion — use \${ARR[@]:+\"\${ARR[@]}\"}"
-            # warning only; some are provably non-empty. Reviewer confirms.
-          fi
-
-          # associative arrays — unsupported in 3.2
-          if grep -nE 'declare -A' scripts/*.sh; then
-            echo "ERROR: associative arrays (declare -A) unsupported in bash 3.2"; fail=1
-          fi
-
-          # mapfile / readarray — unsupported in 3.2
-          if grep -nE '\b(mapfile|readarray)\b' scripts/*.sh; then
-            echo "ERROR: mapfile/readarray unsupported in bash 3.2"; fail=1
-          fi
-
-          exit $fail
-
-      - name: Verify destructive scripts still require confirmation
+      - name: Check the end-to-end report
         run: |
-          # Guardrail: the two mutating scripts must contain an interactive
-          # confirmation prompt. This is a coarse check, not a proof, but it
-          # catches an accidental removal of the safety gate.
-          fail=0
-          for f in scripts/uninstall.sh scripts/remove_mackeeper.sh; do
-            if grep -qE 'read -r?.*\[y/N\]|read -r?.*confirm' "$f"; then
-              echo "  ok  $f has a confirmation prompt"
-            else
-              echo "FAIL  $f is missing its confirmation prompt"; fail=1
-            fi
-          done
-          exit $fail
+          OUT="${{ steps.e2e.outputs.out }}"
+          python3 tests/e2e_assert.py "$(ls "$OUT"/neptune_findings_*.json)" \
+            "${{ steps.e2e.outputs.rc }}" "$(ls "$OUT"/neptune_report_*.html)"
+
+      - name: Upload the sanitized report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: neptune-report-macos
+          # The findings and HTML are sanitized; the combined .txt is not, so
+          # it stays on the runner.
+          path: |
+            ${{ steps.e2e.outputs.out }}/neptune_findings_*.json
+            ${{ steps.e2e.outputs.out }}/neptune_report_*.html
+          retention-days: 14
+          if-no-files-found: warn
