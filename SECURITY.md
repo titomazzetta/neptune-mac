@@ -76,6 +76,7 @@ the credential, and elevates only specific commands.
 | `uninstall.sh` | yes, after confirmation | removing files outside `$HOME` |
 | `remove_mackeeper.sh` | yes, after confirmation | removing files outside `$HOME` |
 | `clean_caches.sh` | **never** | your caches are yours; it refuses to run as root |
+| `fix.sh` (`--fix`) | per fix, after your `y` | only the command it just showed you: `socketfilterfw --setglobalstate on`, `sysadminctl -guestAccount off`, `sysadminctl -autologin off`, `softwareupdate --schedule on`; everything else hands off to the scripts above |
 
 The read-only scans use root to *see more*, never to change anything.
 
@@ -104,6 +105,7 @@ you ask for it) structured findings:
 | `~/.neptune/history.tsv` | one line per run: date, verdict, four scores, four counts | every `neptune.sh` run |
 | `~/.neptune/seen.tsv` | one line per finding: its key, first seen, last seen, run count | every `neptune.sh` run |
 | `~/.neptune/last-listing.tsv` | the numbered list from your last run | every `neptune.sh` run |
+| `~/.neptune/fix-log.tsv` | one line per fix you applied: date, item, check, action, exit status | `neptune.sh --fix` |
 
 `--out DIR` moves every report — including the ones `sentry.sh` and
 `redflag_scan.sh` write for themselves — to `DIR` instead of the Desktop.
@@ -250,6 +252,26 @@ Neptune is distributed as source only. There is no installer, no package, no
 you can read what you are about to run.
 
 ---
+
+## The guided fixer
+
+`fix.sh` (run as `./neptune.sh --fix`) is the only part of Neptune that changes
+settings, and it is built so that you can audit it the same way as the rest:
+
+- **One finding, one shown command, one `y`.** No batch mode, no `--yes`, no
+  unattended run. `q` stops at any point; Enter skips.
+- **The command you see is the command that runs.** System commands are split
+  into plain words and executed directly — never through `eval`, never globbed —
+  and Neptune's own scripts are called by path with fixed flags. A test asserts
+  no fix command contains a pipe, chain, redirect or substitution.
+- **It deletes nothing itself.** Removing an app goes through `uninstall.sh`,
+  clearing caches through `clean_caches.sh`, each with its own list and
+  confirmation. Homebrew's cache is cleared by `brew cleanup`.
+- **No invented fixes.** Double NAT, FileVault, SIP and unknown vendor helpers
+  get instructions (or the right Settings pane opened), not a guessed command.
+- **Everything applied is logged** to `~/.neptune/fix-log.tsv`.
+- `./fix.sh --plan` prints what would be offered for every item and changes
+  nothing.
 
 ## The destructive scripts
 

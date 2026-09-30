@@ -102,6 +102,17 @@ external request.
 pipeline rather than trusting the numbers stored inside, which is also how CI
 tests the renderer without a Mac.
 
+## Layer 4 — fixing (guided, optional)
+
+`./neptune.sh --fix` execs `fix.sh`, which reads the saved listing — now with the
+check id as its sixth column — and asks `plan_for <check> <title> <n>` what to
+offer: **run** (a documented command or a Neptune hand-off), **open** (a System
+Settings pane), or **guide** (instructions, where no honest command exists). One
+action is offered once even when several findings share it (one upgrade run
+covers macOS, Homebrew and App Store items). Every applied fix is logged; the
+session ends with an offer to re-scan, which is what makes the HTML report's
+"since last run" deltas the proof that the fix worked.
+
 ## The destructive side
 
 `uninstall.sh`, `remove_mackeeper.sh` and `clean_caches.sh` share one shape —

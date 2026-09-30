@@ -36,7 +36,7 @@ These aren't features; they're the ethos. Every decision serves them.
 
 1. **On-demand, never resident.** No launch agents, no cron, no menu-bar process.
    The tool that promises to reduce background load must not *be* background load.
-2. **Read-only by default.** Of the ten scripts, three delete anything — the two
+2. **Read-only by default.** Of the eleven scripts, three delete anything — the two
    uninstallers and the cache cleaner — and all three show you everything first
    and require a typed confirmation. (`sentry.sh` writes its own baseline files;
    `check_updates.sh` installs only with an explicit `--upgrade`, asking per

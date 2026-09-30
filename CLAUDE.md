@@ -88,7 +88,7 @@ These are hard rules. Breaking any of them is a regression, even if the code
 ## Repository layout
 
 ```
-scripts/         the ten Neptune scripts, the renderer (neptune_render.py), the
+scripts/         the eleven Neptune scripts, the renderer (neptune_render.py), the
                  extension inspector (neptune_inspect.py), vendor-quirks.tsv
 tests/           lint.sh (runs everything), unit.sh, test_render.py,
                  blast_radius.sh, macos.sh, e2e_assert.py, fixtures/
@@ -109,7 +109,8 @@ CLAUDE.md        this file
 | `audit_system.sh` | Resources, persistence, disk | no |
 | `network_check.sh` | NAT, DNS, latency, connections | no |
 | `netcheck_plus.sh` | Deep network: Wi-Fi quality, LAN census, router checklist (standalone, not in the suite) | no |
-| `check_updates.sh` | macOS + brew + App Store updates | only with `--upgrade`, asking per source; never a major upgrade |
+| `check_updates.sh` | macOS + brew + App Store updates; self-updating apps vs Homebrew's catalog | only with `--upgrade`, asking per source; never a major upgrade |
+| `fix.sh` | Guided fixer behind `neptune.sh --fix`: per-finding fix, exact command, y/N | settings/updates the user confirms one at a time; deletes nothing itself; logs to `~/.neptune/fix-log.tsv` |
 | `clean_caches.sh` | Cache inventory; empties the ones you pick | YES — `--apply`, pick, type `yes`; never as root |
 | `uninstall.sh` | Guided app removal | YES — confirmed; nothing with `--dry-run` |
 | `remove_mackeeper.sh` | Targeted MacKeeper/Clario removal | YES — confirmed; nothing with `--dry-run` |
@@ -161,6 +162,13 @@ CLAUDE.md        this file
   scoring, or the acknowledged flag, and no entry may assert that software is
   safe — only describe what it does. Acknowledging stays a deliberate act by the
   person running the tool.
+- **The fixer only offers what it can show.** `fix.sh`'s `plan_for` is the one
+  table of fixes, keyed by check id like the remediation table. A fix is a
+  documented single-purpose command or a hand-off to a confirmed Neptune script;
+  commands are plain words (no eval, no pipes, no globbing — tested); deletion
+  is never done by `fix.sh` itself. Where no honest one-command fix exists,
+  write guidance. A new check id needs a `plan_for` entry — the unit test fails
+  on one without a kind or guidance.
 - **Prefer editing one script over touching many.** These are independent by
   design; a change to `sentry.sh` should not require changes elsewhere.
 
@@ -170,7 +178,8 @@ See `ROADMAP.md`. v1.0.0 shipped the fail-closed pipeline, check ids and pass
 records, the posture panel, ad-hoc signing as its own class, the cache cleaner,
 and tests that source the shipping code on macOS under bash 3.2.
 
-Next is **login items from Background Task Management** (`sfltool dumpbtm`) —
-which needs a real captured fixture before any parser is written. The
-orchestrator, a bundled model advisor and a Windows sibling are explicitly NOT
-planned.
+v1.1.0 added the guided fixer (`--fix`) and the Homebrew-catalog comparison
+for self-updating apps. Next is **login items from Background Task Management**
+(`sfltool dumpbtm`) — which needs a real captured fixture before any parser is
+written. Unattended fixing, a bundled model advisor and a Windows sibling are
+explicitly NOT planned.

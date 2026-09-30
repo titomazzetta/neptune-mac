@@ -2,10 +2,11 @@
 
 [![CI](https://github.com/titomazzetta/neptune-mac/actions/workflows/ci.yml/badge.svg)](https://github.com/titomazzetta/neptune-mac/actions/workflows/ci.yml)
 
-**An on-demand security audit and cleanup kit for macOS. No daemons, no
-telemetry, no snake oil.**
+**An on-demand security audit, tune-up and cleanup kit for macOS. No daemons,
+no telemetry, no snake oil.**
 
-Neptune answers three questions about a Mac, and shows its work:
+Neptune answers three questions about a Mac, shows its work — and then, if you
+ask it to, fixes what it found, one confirmed step at a time:
 
 1. **Is it secure?** Disk encryption, SIP, Gatekeeper, firewall, update
    policy, every third-party launch item and root helper with its code
@@ -17,6 +18,10 @@ Neptune answers three questions about a Mac, and shows its work:
 3. **What is it carrying that it doesn't need?** Stale apps, oversized caches,
    developer junk, pending updates, and a way to clear what you choose without
    touching what you didn't.
+
+The loop is **audit → understand → fix → re-measure**: `./neptune.sh` diagnoses
+and changes nothing; `./neptune.sh --fix` walks the findings with the exact
+command for each and a y/N per item; the next scan shows the before and after.
 
 It is a set of readable bash scripts, built as the deliberate opposite of the
 "cleaner" apps it was first written to remove. They run only when you run them,
@@ -72,6 +77,7 @@ each one is enforced by a test, not a promise:
 | **Runs on a stock Mac.** bash 3.2 (2007) and BWK awk, the versions Apple ships — every script runs in the C locale because macOS awk *aborts* mid-program on half a UTF-8 character ([Bug 13](docs/DEVLOG.md)). | Grep gates for 3.2 traps; the macOS CI job runs everything under `/bin/bash` 3.2 |
 | **Deletes only what it showed you.** The three destructive scripts list first, need a typed confirmation, have no `--yes`, and are tested against a fake filesystem of decoys — including a "cache" symlinked into `~/Documents`. | `tests/blast_radius.sh` (45 assertions), including a real sandboxed delete compared against the dry run |
 | **Ad-hoc signed is not "signed."** A valid signature with no developer identity — what commodity Mac malware ships with — is its own class, not a pass ([Bug 16](docs/DEVLOG.md)). | Five-class `sig()` tested against captured `codesign` output and a binary CI signs ad hoc itself |
+| **A fix runs only as shown.** `--fix` offers one fix per finding with its exact command and waits for `y`; commands run without `eval` or globbing; the fixer itself deletes nothing and logs what it applied. | `tests/unit.sh` "fix.sh" section: every check id has a plan, no command contains a pipe/chain/substitution, no `rm`/`eval` in the fixer |
 | **Advice is looked up, never generated.** Every command in the report is one you can find in `man` or Apple's docs, or is Neptune's own; none is a pipeline; an unknown gets "could not check" advice, not the fix for a failure. | `tests/test_render.py` checks every command, every check id, and every `./script --flag` the report tells you to run |
 | **Nothing leaves the machine.** Two opt-in flags reach the internet; nothing else does. Homebrew is run with its analytics off. | [`SECURITY.md`](SECURITY.md) gives the one `grep` that proves it |
 | **Releases are verifiable.** Built in CI from the tag, with SHA-256 sums and a signed build-provenance attestation. Actions pinned to commit SHAs, least-privilege tokens. | `.github/workflows/release.yml`; `gh attestation verify` |
@@ -92,6 +98,31 @@ changes anything with it. **Do not run it with `sudo`** — every script refuses
 
 Nothing to install. `--html` and `--json` need python3, which comes with the
 Xcode Command Line Tools (`xcode-select --install`); the scan itself does not.
+
+## Fixing what it found
+
+```bash
+./neptune.sh --fix          # walk the last run's list: fix, command, y/N — per item
+./fix.sh --plan             # what would be offered for each item; changes nothing
+```
+
+For each numbered finding, `--fix` shows what the fix is, the exact command, and
+what kind of change it is — *changes a setting*, *installs or removes software*,
+*Neptune command* — then waits for a `y`. It turns on the firewall, disables the
+Guest account, installs pending updates, clears Homebrew's cache, hands
+cache-clearing and app removal to the confirmed tools below, offers to
+acknowledge a vendor helper you recognize, or opens the right System Settings
+pane. Where there is no honest one-command fix — double NAT is a router setting,
+FileVault needs you to store a recovery key — it says what to do instead of
+inventing a command. It deletes nothing itself, logs every change it applies to
+`~/.neptune/fix-log.tsv`, and ends by offering to re-scan.
+
+**Updates, done the way you'd want them:** everything Homebrew and the App Store
+manage is upgraded in one confirmed step (`check_updates.sh --upgrade`; Apple's
+minor updates install by name, never the major upgrade). Apps that update
+themselves are compared against Homebrew's catalog — already on disk, no extra
+network call — so the report says *Audacity 3.7.8 → 3.7.9, update it in the app*
+instead of just "check your apps".
 
 ## Cleaning and de-bloating
 
@@ -114,12 +145,13 @@ libraries, plug-in scans — so "clear everything" is a choice you make knowingl
 
 | Script | What it does | Changes anything? |
 |---|---|---|
-| `neptune.sh` | **Start here.** Runs the five scans, then the verdict, scores, numbered list, and one combined report. `--html`, `--json`, `--sanitize`, `--replay`, `--acknowledge`. | only its own state in `~/.neptune` |
+| `neptune.sh` | **Start here.** Runs the five scans, then the verdict, scores, numbered list, and one combined report. `--html`, `--json`, `--sanitize`, `--replay`, `--acknowledge`, `--fix`. | only its own state in `~/.neptune` |
+| `fix.sh` | The guided fixer behind `--fix`: each finding's fix with its exact command, applied only on `y`, logged. `--plan` to preview. | **settings and updates you confirm, one at a time**; deletes nothing itself |
 | `sentry.sh` | Change detection against a known-good baseline; process→network map with signing; stale apps. | its baseline in `~/.sentry` |
 | `redflag_scan.sh` | Security posture; launchd persistence, cron, login hooks, root helpers — each target's signature verified; odd processes; listeners; proxies, profiles, network extensions, `/etc/hosts`; risky browser extensions. | no |
 | `network_check.sh` | Double NAT and CGNAT, DNS reliability, gateway latency, per-app connections. | no |
 | `audit_system.sh` | Top CPU/memory, kernel and system extensions, and where the disk went — with what is safely reclaimable. | no |
-| `check_updates.sh` | macOS, Homebrew and App Store updates; apps nothing updates for you. | only with `--upgrade`, asking first |
+| `check_updates.sh` | macOS, Homebrew and App Store updates; self-updating apps compared against Homebrew's catalog. | only with `--upgrade`, asking first |
 | `clean_caches.sh` | Cache inventory; clears what you pick. | **yes** — confirmed; nothing without `--apply` |
 | `uninstall.sh` | Complete app removal: finds every related file, shows it, confirms, deletes, verifies. | **yes** — confirmed; nothing with `--dry-run` |
 | `remove_mackeeper.sh` | Staged MacKeeper/Clario removal — the job that started this project. | **yes** — confirmed; nothing with `--dry-run` |
