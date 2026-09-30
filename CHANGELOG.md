@@ -9,6 +9,22 @@ explains each in full — symptom, root cause, fix, and what was learned.
 
 ---
 
+## [Unreleased]
+
+### Added
+- **Branch protection as code:** `.github/rulesets/main.json` — no direct or
+  force pushes to `main`, all three CI jobs required. `tests/test_repo.py` fails
+  if a CI job is renamed without updating the rule.
+- **OpenSSF Scorecard** workflow (weekly, pinned, read-only default token) and
+  README badge.
+- Issue templates (bug report; false positive / vendor quirk), a code of
+  conduct, and private vulnerability reporting in SECURITY.md.
+- README: requirements, verified install from a release, a first-run
+  walkthrough, and troubleshooting.
+- `tests/test_repo.py`: ruleset ↔ CI job names, SHA pins, read-only default
+  tokens, and every relative link in the docs resolves. `tests/lint.sh` now runs
+  every python test file.
+
 ## [1.1.0] — 2026-09-30
 
 Neptune goes from diagnosing to fixing — with the same rule as everything else:
