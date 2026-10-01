@@ -10,7 +10,9 @@ about itself, checked on the platform the report is for.
 
 Usage: e2e_assert.py <neptune_findings_*.json> <exit-code> <report.html>
 """
+import glob
 import json
+import os
 import sys
 
 path, rc, html_path = sys.argv[1], int(sys.argv[2]), sys.argv[3]
@@ -49,6 +51,26 @@ page = open(html_path, encoding="utf-8").read().lower()
 for bad in ("<script", "http://", "https://", "<link"):
     if bad in page:
         problems.append("HTML report contains %r" % bad)
+
+brief = glob.glob(os.path.join(os.path.dirname(path), "neptune_ai_brief_*.md"))
+if not brief:
+    problems.append("no AI brief was written beside the report")
+
+# On GitHub, the same facts as a table at the top of the run page, so the
+# result of a real macOS run is one click away rather than in a log.
+summary = os.environ.get("GITHUB_STEP_SUMMARY")
+if summary:
+    label = {"security": "Security", "network": "Network", "bloat": "Tidiness", "maintenance": "Updates"}
+    c = report["counts"]
+    with open(summary, "a", encoding="utf-8") as fh:
+        fh.write("### Neptune on a real Mac: %s\n\n" % (report.get("verdict_text") or report["verdict"]))
+        fh.write("| " + " | ".join(label.get(k, k) for k in report["scores"]) + " |\n")
+        fh.write("|" + "---|" * len(report["scores"]) + "\n")
+        fh.write("| " + " | ".join(str(v) for v in report["scores"].values()) + " |\n\n")
+        fh.write("%d to look at · %d small · %d couldn't check · %d passed · exit %d\n\n"
+                 % (c["attention"], c["notice"], c["unknown"], c["pass"], rc))
+        fh.write(("**Report checks: all passed.**\n" if not problems else
+                  "**Report checks failed:**\n\n" + "".join("- %s\n" % p for p in problems)))
 
 print("verdict: %s   exit: %d   passed: %d   attention: %d   minor: %d   unknown: %d"
       % (report["verdict"], rc, report["counts"]["pass"], report["counts"]["attention"],
