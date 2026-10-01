@@ -258,8 +258,12 @@ t_section "fix.sh — the guided fixer"
   t_is "one upgrade run covers macOS, brew and App Store findings" "upgrade upgrade upgrade" "$A1 $A2 $ACTION"
   plan_for persistence-launchd "UNSIGNED persistence: a runs /Applications/SoundID Reference.app/Contents/MacOS/x (/p.plist)"
   t_is "an unsigned app's finding offers its uninstall, name kept whole" "uninstall:SoundID Reference" "$ACTION"
+  t_is "software you might have chosen can be kept instead" "1" "$KEEP"
   plan_for double-nat x
   t_is "no invented fix where there is none (double NAT is a router setting)" "guide" "$KIND"
+  t_is "a confirmed-fine double NAT can be kept" "1" "$KEEP"
+  plan_for firewall x
+  t_is "a plain setting is not offered as keep" "0" "$KEEP"
   t_is "run_words: a ; is data, not a command separator" "a;b" "$(run_words 'printf %s a;b')"
   t_is "run_words: no globbing" "*" "$(cd "$T" && run_words 'printf %s *')"
 )
@@ -272,6 +276,12 @@ cp "$LISTING" "$FH/.neptune/last-listing.tsv"
 PLANOUT=$(HOME="$FH" ./scripts/fix.sh --plan)
 t_is "--plan covers every numbered item" "$(grep -vc '^#' "$LISTING")" "$(printf '%s\n' "$PLANOUT" | grep -vc '^#')"
 t_is "--plan changes nothing and writes no log" "no" "$([ -e "$FH/.neptune/fix-log.tsv" ] && echo yes || echo no)"
+t_is "--only is a queue: those items, in that order, once each" "3 1 12" \
+   "$(HOME="$FH" ./scripts/fix.sh --plan --only 3,1,3,12 | grep -v '^#' | cut -f1 | tr '\n' ' ' | sed 's/ $//')"
+HOME="$FH" ./scripts/fix.sh --plan --only 2,99 >/dev/null 2>&1
+t_is "--only with a number that is not in the list: exit 64, nothing runs" "64" "$?"
+HOME="$FH" ./scripts/fix.sh --only 1x >/dev/null 2>&1
+t_is "--only with something that is not a number: exit 64" "64" "$?"
 mkdir -p "$T/nofix"
 HOME="$T/nofix" ./scripts/fix.sh --plan >/dev/null 2>&1
 t_is "no saved run yet: exit 64" "64" "$?"
