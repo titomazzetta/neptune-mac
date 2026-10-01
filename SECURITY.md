@@ -99,9 +99,10 @@ you ask for it) structured findings:
 | `~/.sentry/baseline.txt` | known-good snapshot | `sentry.sh` |
 | `~/.sentry/current.txt` | latest snapshot | `sentry.sh` |
 | `~/.sentry/format` | baseline format version | `sentry.sh` |
-| `~/.neptune/allow` | findings you acknowledged as known-good | `neptune.sh --acknowledge` |
-| `~/Desktop/neptune_findings_*.json` | structured findings | `neptune.sh --json` |
-| `~/Desktop/neptune_report_*.html` | readable report with remediation | `neptune.sh --html` |
+| `~/.neptune/allow` | findings you acknowledged as known-good | `neptune.sh --acknowledge`, or **k** in `--fix` |
+| `~/Desktop/neptune_findings_*.json` | structured findings | every `neptune.sh` run with python3 (`--no-html` skips) |
+| `~/Desktop/neptune_report_*.html` | readable report with remediation | every `neptune.sh` run with python3 (`--no-html` skips) |
+| `~/Desktop/neptune_ai_brief_*.md` | the findings and a prompt for an AI assistant, **always sanitized** | every `neptune.sh` run with python3 (`--no-html` skips) |
 | `~/.neptune/history.tsv` | one line per run: date, verdict, four scores, four counts | every `neptune.sh` run |
 | `~/.neptune/seen.tsv` | one line per finding: its key, first seen, last seen, run count | every `neptune.sh` run |
 | `~/.neptune/last-listing.tsv` | the numbered list from your last run | every `neptune.sh` run |
@@ -269,9 +270,26 @@ settings, and it is built so that you can audit it the same way as the rest:
   confirmation. Homebrew's cache is cleared by `brew cleanup`.
 - **No invented fixes.** Double NAT, FileVault, SIP and unknown vendor helpers
   get instructions (or the right Settings pane opened), not a guessed command.
+- **Keeping is a choice, never a default.** For software you may have chosen,
+  `k` writes the same line `--acknowledge` would to `~/.neptune/allow`; the
+  item stays in every report. Nothing is kept unless you press `k` for it.
+- **A queue cannot fix the wrong thing.** `--only 9,2` runs exactly those items
+  from your last listing; one number that is not in it stops the run before
+  anything is offered.
 - **Everything applied is logged** to `~/.neptune/fix-log.tsv`.
 - `./fix.sh --plan` prints what would be offered for every item and changes
   nothing.
+
+## The AI brief
+
+Each run writes `neptune_ai_brief_<date>.md` for pasting into an AI assistant.
+It is always sanitized, whether or not you passed `--sanitize`: computer name,
+username, other accounts' home folders, MAC addresses and the host part of every
+IP address are replaced. What an address *means* is kept: `127.0.0.1` and
+`0.0.0.0` stay (only this Mac versus your whole network), and private ranges
+keep their prefix (`192.168.x.x`), because private versus public is the whole
+double-NAT question. `/Users/Shared` is a system folder and is left alone.
+Neptune never sends the brief anywhere; read it, then decide.
 
 ## The destructive scripts
 

@@ -11,7 +11,36 @@ explains each in full — symptom, root cause, fix, and what was learned.
 
 ## [Unreleased]
 
+### Changed — how Neptune reads
+- **Plain words everywhere.** `scripts/phrases.tsv` turns each recorded title
+  into a headline and a one-line context ("The firewall is off" / "A common
+  default. Worth turning on if this Mac joins public Wi-Fi."). Titles, check
+  ids and acknowledge keys are untouched, so rewording never un-keeps anything.
+  A test reads the table with Python's regex engine too and requires the same
+  headline as awk for every fixture finding.
+- **The terminal** shows one progress line per scan, then a one-screen summary:
+  verdict, counts, four scores, the numbered list in plain words, and the next
+  step. `--verbose` streams everything as before. Colour only on a terminal;
+  `NO_COLOR` respected; ASCII fallback outside UTF-8.
+- **The HTML report** is rebuilt around a first view (verdict, synopsis, scores,
+  counts), then *Protection at a glance*, *Do these next* (ranked by score
+  gain, with the queue command filled in), *Recommended commands* for this Mac,
+  and each finding on an explanation ladder — Simple / Detailed / Technical,
+  switched with CSS only — down to what every part of every command does and
+  how to undo it. Passed checks, kept items and scoring are collapsed. Still no
+  JavaScript and no network requests.
+- Categories read as **Security, Network, Tidiness, Updates** (ids unchanged).
+
 ### Added
+- **`--fix --only 9,2,12`** — a queue: those items, in that order. An unknown
+  number stops it before anything runs.
+- **k keep / u uninstall / skip** in `--fix` for software you may have chosen,
+  and keep for a double NAT you have confirmed is passthrough.
+- **AI brief** (`neptune_ai_brief_<date>.md`) on every run with python3: the
+  findings plus a prompt, always sanitized. HTML, JSON and the brief are now
+  automatic; `--no-html` skips them.
+- CI writes the macOS run's verdict and scores to the job summary, and keeps the
+  sanitized brief with the uploaded report.
 - **Branch protection as code:** `.github/rulesets/main.json` — no direct or
   force pushes to `main`, all three CI jobs required. `tests/test_repo.py` fails
   if a CI job is renamed without updating the rule.
@@ -24,6 +53,13 @@ explains each in full — symptom, root cause, fix, and what was learned.
 - `tests/test_repo.py`: ruleset ↔ CI job names, SHA pins, read-only default
   tokens, and every relative link in the docs resolves. `tests/lint.sh` now runs
   every python test file.
+
+### Fixed
+- The sanitizer turned `127.0.0.1` into `0.0.0.0` — "only this Mac" into "your
+  whole network" — and `/Users/Shared` into a user's home. Loopback, `0.0.0.0`
+  and `/Users/Shared` are kept; private ranges keep their prefix.
+- A known vendor's name no longer hides a fact about the finding: "Only this
+  Mac can reach it" stays beside "Waves ships it this way".
 
 ## [1.1.0] — 2026-09-30
 

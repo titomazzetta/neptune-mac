@@ -1148,6 +1148,49 @@ any vendor. The comparison is deliberately conservative: `7.1.9 (88375)` and
 `7.1.9.88375` are the same release, and a false "outdated" teaches people to
 ignore the list faster than a missed one does.
 
+## Voice — a security tool people can read
+
+The first person to run 1.1 for real said the output read "a bit robotic", and
+the HTML "a little bloated". Both were right, and both were the same problem:
+the scans wrote titles for the scorer, and everything downstream showed those
+titles to people. `UNSIGNED persistence: com.sonarworks… runs … (…plist)` is a
+precise record and a poor sentence.
+
+The fix keeps the record and adds a reading of it:
+
+- **Titles stay the source of truth.** They are the acknowledge keys in
+  `~/.neptune/allow`; rewording one would silently un-keep something a person
+  deliberately kept. So the plain words live in a separate table,
+  `scripts/phrases.tsv`, keyed by check id, and the scorer attaches a headline
+  and a context line to each record. The JSON carries both.
+- **One table, two regex engines, one test.** The phrasebook is applied by BWK
+  awk. A Python reading of the same table runs over every fixture finding and
+  must produce the same headline, so a row that only works by an accident of
+  one engine fails CI instead of producing a garbled sentence on someone's Mac.
+- **A vendor name is a label, never a substitute for a fact.** The first draft
+  replaced the context line with "Waves ships it this way", which threw away
+  "Only this Mac can reach it" — the most useful sentence about that listener.
+  Context that is a fact now carries a `+` in the table and survives.
+- **Explain at the depth the reader wants.** The HTML report explains every
+  finding three ways (in short / why it matters / under the hood) and every
+  command part by part, switched by three radio buttons and CSS. No script: the
+  report's claim about itself — no JavaScript, no network — is worth more than
+  a nicer toggle. The same constraint answered "can I right-click to queue
+  this?": no, but every item shows its number, and `--fix --only 9,2,12` is a
+  queue you can type.
+- **"What is this worth?" is computed, not guessed.** *Do these next* ranks by
+  score gain, from a Python copy of the awk scoring. Two copies of a formula is
+  a risk, so a test requires both to produce the same scores on the fixture. It
+  also showed that "keep Waves" is worth +8, not +16: removing the cheap repeat
+  findings of a kind does not refund the expensive first one.
+
+Writing the AI brief exposed an older sanitizer bug: it replaced every IPv4
+address with `0.0.0.0`, which turned `127.0.0.1:6985 [localhost-only]` into
+`0.0.0.0:6985` — "only this Mac" into "anything on the network". A sanitized
+report that inverts a finding is worse than an unsanitized one. Addresses now
+keep their meaning (loopback, any-address, private prefix) and lose their
+identity.
+
 ## Cross-cutting practices that came out of these
 
 - **CI as a regression net for exactly these bugs.** Linux runs shellcheck,

@@ -89,7 +89,8 @@ These are hard rules. Breaking any of them is a regression, even if the code
 
 ```
 scripts/         the eleven Neptune scripts, the renderer (neptune_render.py), the
-                 extension inspector (neptune_inspect.py), vendor-quirks.tsv
+                 extension inspector (neptune_inspect.py), vendor-quirks.tsv,
+                 and the phrasebook (phrases.tsv)
 tests/           lint.sh (runs everything), unit.sh, test_render.py,
                  blast_radius.sh, macos.sh, e2e_assert.py, fixtures/
 docs/            extended docs, the report-reading guide, the AI-advisor prompt
@@ -110,7 +111,7 @@ CLAUDE.md        this file
 | `network_check.sh` | NAT, DNS, latency, connections | no |
 | `netcheck_plus.sh` | Deep network: Wi-Fi quality, LAN census, router checklist (standalone, not in the suite) | no |
 | `check_updates.sh` | macOS + brew + App Store updates; self-updating apps vs Homebrew's catalog | only with `--upgrade`, asking per source; never a major upgrade |
-| `fix.sh` | Guided fixer behind `neptune.sh --fix`: per-finding fix, exact command, y/N | settings/updates the user confirms one at a time; deletes nothing itself; logs to `~/.neptune/fix-log.tsv` |
+| `fix.sh` | Guided fixer behind `neptune.sh --fix`: per-finding fix, exact command, y/N; k/u/skip for software you may have chosen; `--only` queue | settings/updates the user confirms one at a time; `~/.neptune/allow` on k; deletes nothing itself; logs to `~/.neptune/fix-log.tsv` |
 | `clean_caches.sh` | Cache inventory; empties the ones you pick | YES — `--apply`, pick, type `yes`; never as root |
 | `uninstall.sh` | Guided app removal | YES — confirmed; nothing with `--dry-run` |
 | `remove_mackeeper.sh` | Targeted MacKeeper/Clario removal | YES — confirmed; nothing with `--dry-run` |
@@ -130,6 +131,16 @@ CLAUDE.md        this file
   where none exists. An `unknown` gets could-not-check advice, never the fix for
   a failure. `tests/test_render.py` imports the module and asserts all of it,
   including that every `CHECK=` id in the scans has an entry.
+- **One voice, kept apart from the record.** What a person reads comes from
+  `scripts/phrases.tsv` (headline + context per check id), and the explanation
+  ladder (`SHORT`, `UNDO`, `PROGRAMS`/`FLAGS` in the renderer). Never reword a
+  recorded title to change how it reads: titles are acknowledge keys. A new
+  check id needs a phrasebook row; a new suggested command needs every program
+  and flag in `PROGRAMS`/`FLAGS` — tests fail otherwise. Voice: say what the
+  thing is, then what is off about it; plain words; no capitals for emphasis.
+- **The HTML report stays script-free.** No JavaScript, ever — the reading-level
+  switch is radio inputs and CSS, sections are `<details>`. A feature that
+  needs script (right-click menus, drag to queue) belongs in the CLI instead.
 - **Findings are recorded, not scraped.** Each check sets `CHECK=<stable-id>`
   and reports through a helper that prints AND calls `record`, appending
   `severity|category|scan|check|title` to `$NEPTUNE_FINDINGS`:
