@@ -39,19 +39,45 @@ set -u
 # length()/substr() mean the same thing on macOS and on the Linux CI runner.
 # The bytes pass through unchanged, so the terminal still shows em-dashes.
 # ---------------------------------------------------------------------------
+# What the person's terminal can show is decided by THEIR locale, so read it
+# before switching this process to C.
+NEP_LOCALE="${LC_ALL:-${LC_CTYPE:-${LANG:-}}}"
 export LC_ALL=C
 
 NEPTUNE_VERSION="1.1.0"
 
-BOLD=$(tput bold 2>/dev/null || true)
-CYN=$(tput setaf 6 2>/dev/null || true)
-GRN=$(tput setaf 2 2>/dev/null || true)
-YEL=$(tput setaf 3 2>/dev/null || true)
-RED=$(tput setaf 1 2>/dev/null || true)
-RST=$(tput sgr0 2>/dev/null || true)
+# Style. Colour only on a real terminal, never with NO_COLOR (no-color.org) or
+# TERM=dumb, so a piped or saved run is plain text. Symbols only where the
+# person's locale is UTF-8; ASCII otherwise. Colour never carries meaning on
+# its own — every line also has a word or a symbol.
+nep_style() {
+  BOLD=""; DIM=""; CYN=""; GRN=""; YEL=""; RED=""; MAG=""; RST=""
+  if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != "dumb" ]; then
+    BOLD=$(tput bold 2>/dev/null || true); DIM=$(tput dim 2>/dev/null || true)
+    CYN=$(tput setaf 6 2>/dev/null || true); GRN=$(tput setaf 2 2>/dev/null || true)
+    YEL=$(tput setaf 3 2>/dev/null || true); RED=$(tput setaf 1 2>/dev/null || true)
+    MAG=$(tput setaf 5 2>/dev/null || true); RST=$(tput sgr0 2>/dev/null || true)
+  fi
+  case "$NEP_LOCALE" in
+    *UTF-8*|*utf-8*|*UTF8*|*utf8*) SYM_OK="✓"; SYM_WARN="!"; SYM_DOT="●"; SYM_SEP="·"; BAR_ON="▰"; BAR_OFF="▱"; ELL="…" ;;
+    *) SYM_OK="ok"; SYM_WARN="!"; SYM_DOT="*"; SYM_SEP="-"; BAR_ON="#"; BAR_OFF="."; ELL="..." ;;
+  esac
+}
+nep_plain() { BOLD=""; DIM=""; CYN=""; GRN=""; YEL=""; RED=""; MAG=""; RST=""; }
+nep_style
+
+# The names people read for each category. JSON keeps the ids.
+cat_label() {
+  case "$1" in
+    security) echo "Security" ;; network) echo "Network" ;;
+    bloat) echo "Tidiness" ;;    maintenance) echo "Updates" ;;
+    *) echo "$1" ;;
+  esac
+}
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"   # BASH_SOURCE: correct when sourced by tests too
 QUIRKS="$DIR/vendor-quirks.tsv"
+PHRASES="$DIR/phrases.tsv"
 RENDERER="$DIR/neptune_render.py"
 
 ############################################################################
@@ -83,9 +109,13 @@ RENDERER="$DIR/neptune_render.py"
 # nep_score_records <findings> <allowfile> <quirks> <scored-out> <stats-out>
 #
 # Validates each record, derives its acknowledge key, marks it acknowledged or
-# not, attaches a vendor label, and drops exact duplicates. Writes:
+# not, attaches a vendor label and the plain-language reading from
+# phrases.tsv, and drops exact duplicates. Writes:
 #
-#     severity|category|scan|check|title|key|acked|vendor
+#     severity|category|scan|check|title|key|acked|vendor|headline|context
+#
+# The title stays the technical record — and the acknowledge key — so wording
+# can change without ever un-acknowledging anything. The headline is for people.
 #
 # and "<lines> <valid> <malformed> <duplicates> <written>" to <stats-out>.
 #
@@ -95,7 +125,38 @@ RENDERER="$DIR/neptune_render.py"
 nep_score_records() {
   local IN=$1 ALLOWF=$2 QF=$3 OUT=$4 STATS=$5
   : > "$STATS"
-  awk -v allowfile="$ALLOWF" -v quirks="$QF" -v statsfile="$STATS" '
+  awk -v allowfile="$ALLOWF" -v quirks="$QF" -v statsfile="$STATS" -v phrases="$PHRASES" '
+    # fill <template> <s> — replace every {s}. Not gsub: & and \\ in s are data.
+    function fill(t, v,   i, out) {
+      out = ""
+      while ((i = index(t, "{s}")) > 0) { out = out substr(t, 1, i - 1) v; t = substr(t, i + 3) }
+      return out t
+    }
+    # phrase <check> <title> <severity> <vendor> — sets HEAD and CTX. The first
+    # row whose check and match fit wins; no row means the title is used as is.
+    function phrase(chk, title, sev, label,   i, v, keepctx) {
+      HEAD = title; CTX = ""; keepctx = 0
+      if (sev != "pass") {
+        for (i = 1; i <= np; i++) {
+          if (pc[i] != chk) continue
+          if (pm[i] != "-" && title !~ pm[i]) continue
+          v = title
+          if (psx[i] != "-") sub(psx[i], "", v)
+          if (ppx[i] != "-") sub(ppx[i], "", v)
+          HEAD = fill(ph[i], v)
+          CTX = (pcx[i] == "-") ? "" : fill(pcx[i], v)
+          # A leading + marks context that is a FACT about this finding
+          # ("only this Mac can reach it"), kept when a vendor is named.
+          # Without it, a vendor sentence replaces the general explanation.
+          keepctx = (substr(CTX, 1, 1) == "+")
+          if (keepctx) CTX = substr(CTX, 2)
+          break
+        }
+      }
+      if (label != "" && sev != "pass" && sev != "info")
+        CTX = (keepctx && CTX != "" ? CTX " " : "") label " ships it this way" (sev == "attention" ? ". Likely one to keep." : ".")
+      gsub(/\|/, "/", HEAD); gsub(/\|/, "/", CTX)
+    }
     BEGIN {
       FS = "|"
       while ((getline l < allowfile) > 0) if (l != "" && l !~ /^#/) allow[l] = 1
@@ -108,6 +169,13 @@ nep_score_records() {
         nq++; pat[nq] = f[1]; ven[nq] = f[2]
       }
       close(quirks)
+      np = 0
+      while ((getline line < phrases) > 0) {
+        if (line ~ /^#/ || line ~ /^[ \t]*$/) continue
+        split(line, f, "\t")
+        np++; pc[np] = f[1]; pm[np] = f[2]; psx[np] = f[3]; ppx[np] = f[4]; ph[np] = f[5]; pcx[np] = f[6]
+      }
+      close(phrases)
       ok["attention"] = 1; ok["notice"] = 1; ok["unknown"] = 1
       ok["info"] = 1;      ok["pass"] = 1
     }
@@ -148,7 +216,8 @@ nep_score_records() {
       # Only problems can be acknowledged. A pass or a note about the run has
       # nothing to silence.
       acked = (sev != "pass" && sev != "info" && (key in allow)) ? 1 : 0
-      printf "%s|%s|%s|%s|%s|%s|%d|%s\n", sev, cat, scan, chk, title, key, acked, label
+      phrase(chk, title, sev, label)
+      printf "%s|%s|%s|%s|%s|%s|%d|%s|%s|%s\n", sev, cat, scan, chk, title, key, acked, label, HEAD, CTX
       written++
     }
     END { printf "%d %d %d %d %d\n", NR, valid, bad, dups, written > statsfile }
@@ -209,11 +278,16 @@ nep_verdict() {
   N_ATTENTION=$(nep_count "$SC" attention); N_NOTICE=$(nep_count "$SC" notice)
   N_UNKNOWN=$(nep_count "$SC" unknown);     N_ACK=$(nep_count "$SC" acknowledged)
   N_INFO=$(nep_count "$SC" info);           N_PASS=$(nep_count "$SC" pass)
-  if   [ "${N_ATTENTION:-0}" -gt 0 ]; then VERDICT="NEEDS ATTENTION"; VKEY=needs_attention; VCOL="$RED"
-  elif [ "$INTEGRITY" != "1" ];       then VERDICT="INCOMPLETE — results were lost; this is NOT a clean bill of health"; VKEY=incomplete; VCOL="$YEL"
-  elif [ "${N_UNKNOWN:-0}"   -gt 0 ]; then VERDICT="HEALTHY — but some checks could not run"; VKEY=incomplete; VCOL="$YEL"
-  elif [ "${N_NOTICE:-0}"    -gt 0 ]; then VERDICT="HEALTHY — minor items"; VKEY=healthy_minor; VCOL="$GRN"
-  else                                     VERDICT="HEALTHY"; VKEY=healthy; VCOL="$GRN"
+  if [ "${N_ATTENTION:-0}" -gt 0 ]; then
+    VKEY=needs_attention; VCOL="$RED"
+    if   [ "$N_ATTENTION" -eq 1 ]; then VERDICT="One thing needs you."
+    elif [ "$N_ATTENTION" -le 6 ]; then VERDICT="A few things need you."
+    else                                VERDICT="Several things need you."
+    fi
+  elif [ "$INTEGRITY" != "1" ];       then VERDICT="Incomplete. Some results were lost, so this can't vouch for the Mac."; VKEY=incomplete; VCOL="$YEL"
+  elif [ "${N_UNKNOWN:-0}"   -gt 0 ]; then VERDICT="Looks healthy, but some checks couldn't run."; VKEY=incomplete; VCOL="$YEL"
+  elif [ "${N_NOTICE:-0}"    -gt 0 ]; then VERDICT="Healthy. A few small things to tidy."; VKEY=healthy_minor; VCOL="$GRN"
+  else                                     VERDICT="Healthy. Nothing needs you."; VKEY=healthy; VCOL="$GRN"
   fi
 }
 
@@ -232,8 +306,9 @@ nep_exit_status() {
 # nep_listing <scored> <listing-out> <run-label>
 #
 # The numbered, actionable list — attention, then could-not-check, then minor —
-# as n, severity, category, key, title, check (the check id is last so older
-# readers of the first five columns keep working; fix.sh keys on it) —
+# as n, severity, category, key, title, check, headline, context (new columns
+# go on the end so older readers of the first five keep working; fix.sh keys
+# on the check id and speaks the headline) —
 # exactly as the terminal, the HTML report and --acknowledge number it. Saved
 # after every run so that `--acknowledge 5` means item 5 of the list you READ,
 # not item 5 of a fresh scan whose numbering may have shifted (DEVLOG Bug 14).
@@ -241,12 +316,12 @@ nep_listing() {
   local SCR=$1 OUT=$2 LABEL=$3
   {
     printf '# %s\n' "$LABEL"
-    printf '# n\tseverity\tcategory\tkey\ttitle\tcheck\n'
+    printf '# n\tseverity\tcategory\tkey\ttitle\tcheck\theadline\tcontext\n'
     awk -F'|' '
       $7 == 0 && $1 == "attention" { a[++na] = $0 }
       $7 == 0 && $1 == "unknown"   { u[++nu] = $0 }
       $7 == 0 && $1 == "notice"    { m[++nm] = $0 }
-      function emit(rec,   f) { split(rec, f, "|"); printf "%d\t%s\t%s\t%s\t%s\t%s\n", ++n, f[1], f[2], f[6], f[5], f[4] }
+      function emit(rec,   f) { split(rec, f, "|"); printf "%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", ++n, f[1], f[2], f[6], f[5], f[4], f[9], f[10] }
       END { for (i = 1; i <= na; i++) emit(a[i])
             for (i = 1; i <= nu; i++) emit(u[i])
             for (i = 1; i <= nm; i++) emit(m[i]) }
@@ -255,71 +330,74 @@ nep_listing() {
 }
 
 # render_verdict <scored> <scores> <listing> <integrity 0|1> <stats-message>
+#
+# The one-screen summary: verdict sentence, counts, four scores, then the
+# numbered list in plain words (headline, and a dimmed line of context), and
+# the next step. The same function writes the text report — called after
+# nep_plain, so the file carries no colour codes.
 render_verdict() {
   local SCR=$1 SC=$2 LST=$3 INTEGRITY=$4 WHY=$5
-  echo "================================================================"
-  echo "  $VERDICT"
-  echo "================================================================"
+  echo
+  printf '  %s%s%s %s%s%s\n' "$VCOL" "$SYM_DOT" "$RST" "$BOLD" "$VERDICT" "$RST"
+  local T="${N_ATTENTION:-0} to look at $SYM_SEP ${N_NOTICE:-0} small $SYM_SEP ${N_UNKNOWN:-0} couldn't check $SYM_SEP ${N_PASS:-0} passed"
+  [ "${N_ACK:-0}" -gt 0 ] && T="$T $SYM_SEP ${N_ACK} kept on purpose"
+  printf '    %s%s%s\n' "$DIM" "$T" "$RST"
   if [ "$INTEGRITY" != "1" ]; then
     echo
-    echo "  !! REPORT INTEGRITY FAILURE: $WHY"
-    echo "  !! Some results are missing. Nothing below proves the machine is clean."
+    printf '    %s%s Some results were lost: %s.%s\n' "$YEL" "$SYM_WARN" "$WHY" "$RST"
+    printf '    %sNothing here proves this Mac is clean. Run it again.%s\n' "$YEL" "$RST"
   fi
   echo
-  awk -F'|' '$1=="score" {
-    bar = ""
-    filled = int($3 / 10)
-    for (i = 0; i < 10; i++) bar = bar (i < filled ? "#" : ".")
-    printf "  %-12s %3d/100  [%s]%s\n", $2, $3, bar,
-           ($4 > 0 ? "  (" $4 " acknowledged)" : "")
-  }' "$SC"
-  echo
-  printf '  %s checks passed · %s attention · %s minor · %s could not run · %s acknowledged' \
-    "${N_PASS:-0}" "${N_ATTENTION:-0}" "${N_NOTICE:-0}" "${N_UNKNOWN:-0}" "${N_ACK:-0}"
-  [ "${N_INFO:-0}" -gt 0 ] && printf ' · %s informational' "$N_INFO"
-  echo
+  # Two scores per row, bar of ten.
+  awk -F'|' -v on="$BAR_ON" -v off="$BAR_OFF" -v b="$BOLD" -v r="$RST" '
+    function label(c) { return c == "bloat" ? "Tidiness" : c == "maintenance" ? "Updates" : toupper(substr(c, 1, 1)) substr(c, 2) }
+    $1 == "score" {
+      bar = ""; filled = int($3 / 10)
+      for (i = 0; i < 10; i++) bar = bar (i < filled ? on : off)
+      cell[++n] = sprintf("%-9s %s%3d%s  %s", label($2), b, $3, r, bar)
+    }
+    END { for (i = 1; i <= n; i += 2) printf "    %s%s\n", cell[i], (i + 1 <= n ? "     " cell[i + 1] : "") }
+  ' "$SC"
 
-  # ONE number sequence across the three sections, read from the saved listing
-  # so what is printed and what --acknowledge resolves are the same file.
-  local LAST="" N SEV CAT KEY TITLE VEN
-  while IFS="$(printf '\t')" read -r N SEV CAT KEY TITLE _CHK; do
+  # ONE number sequence across the three groups, read from the saved listing,
+  # so what is printed and what --acknowledge and --fix resolve are one file.
+  local LAST="" N SEV _CAT _KEY TITLE _CHK HEAD CTX MARK
+  while IFS="$(printf '\t')" read -r N SEV _CAT _KEY TITLE _CHK HEAD CTX; do
     case "$N" in ''|'#'*) continue ;; esac
     if [ "$SEV" != "$LAST" ]; then
       echo
       case "$SEV" in
-        attention) echo "  NEEDS ATTENTION" ;;
-        unknown)   echo "  COULD NOT BE CHECKED  (treat as unknown, not clean)" ;;
-        notice)    echo "  MINOR" ;;
+        attention) printf '  %sLook at these%s\n' "$BOLD" "$RST" ;;
+        unknown)   printf '  %sCouldn'"'"'t check%s %s(unknown is never counted as fine)%s\n' "$BOLD" "$RST" "$DIM" "$RST" ;;
+        notice)    printf '  %sSmall things%s\n' "$BOLD" "$RST" ;;
       esac
       LAST=$SEV
     fi
-    printf '   %2d. [%s] %s\n' "$N" "$CAT" "$TITLE"
-    # Through the environment, not -v: awk rewrites backslash escapes in -v
-    # values, and lsof prints a space in a command name as \x20.
-    VEN=$(K="$KEY" T="$TITLE" awk -F'|' '$6==ENVIRON["K"] && $5==ENVIRON["T"] {print $8; exit}' "$SCR")
-    [ -n "$VEN" ] && printf '       known %s pattern — see the HTML report for what it is\n' "$VEN"
+    case "$SEV" in attention) MARK="$RED" ;; unknown) MARK="$MAG" ;; *) MARK="$YEL" ;; esac
+    printf '   %s%3s%s  %s\n' "$MARK" "$N" "$RST" "${HEAD:-$TITLE}"
+    [ -n "${CTX:-}" ] && printf '        %s%s%s\n' "$DIM" "$CTX" "$RST"
   done < "$LST"
 
-  # Unnumbered on purpose: the numbers are the argument to --acknowledge, and
-  # there is nothing to acknowledge here. These are notes about the run.
-  if [ "${N_INFO:-0}" -gt 0 ]; then
-    echo; echo "  FOR INFORMATION — about this run, not about your machine (no score impact)"
-    awk -F'|' '$1=="info" {printf "    · [%s] %s\n", $2, $5}' "$SCR"
-  fi
-
+  # Unnumbered on purpose: the numbers are what --fix and --acknowledge take,
+  # and there is nothing to act on in these.
   if [ "${N_ACK:-0}" -gt 0 ]; then
-    echo; echo "  ACKNOWLEDGED — known-good on this machine, still counted"
-    awk -F'|' '$7==1 {printf "   · [%s] %s\n", $2, $5}' "$SCR" | head -8
-    [ "${N_ACK:-0}" -gt 8 ] && echo "   · ... and $(( N_ACK - 8 )) more"
+    echo; printf '  %sKept on purpose%s %s(still counted, no longer costing points)%s\n' "$BOLD" "$RST" "$DIM" "$RST"
+    awk -F'|' -v d="$DIM" -v r="$RST" -v s="$SYM_SEP" '$7 == 1 { printf "     %s%s %s%s\n", d, s, ($9 != "" ? $9 : $5), r }' "$SCR" | head -6
+    [ "${N_ACK:-0}" -gt 6 ] && printf '     %s%s and %s more%s\n' "$DIM" "$SYM_SEP" "$(( N_ACK - 6 ))" "$RST"
+  fi
+  if [ "${N_INFO:-0}" -gt 0 ]; then
+    echo; printf '  %sAbout this run%s\n' "$BOLD" "$RST"
+    awk -F'|' -v d="$DIM" -v r="$RST" -v s="$SYM_SEP" '$1 == "info" { printf "     %s%s %s%s\n", d, s, ($9 != "" ? $9 : $5), r }' "$SCR"
   fi
 
-  if [ "${N_ATTENTION:-0}" -gt 0 ] || [ "${N_NOTICE:-0}" -gt 0 ]; then
-    echo
-    echo "  Fix them one at a time, each shown and confirmed:  ./neptune.sh --fix"
-    echo "  Recurring vendor quirk rather than a problem? Acknowledge it:"
-    echo "      ./neptune.sh --acknowledge <n>      (number from the list above)"
+  echo
+  if [ "${N_ATTENTION:-0}" -gt 0 ] || [ "${N_NOTICE:-0}" -gt 0 ] || [ "${N_UNKNOWN:-0}" -gt 0 ]; then
+    printf '  %sNext%s   ./neptune.sh --fix                  go through these one at a time\n' "$BOLD" "$RST"
+    printf '         ./neptune.sh --fix --only <n,n>     just the ones you pick, in that order\n'
+    printf '         ./neptune.sh --acknowledge <n>      keep something you recognize\n'
+  else
+    printf '  %sNext%s   nothing to do. Run it again after you install something new.\n' "$BOLD" "$RST"
   fi
-  echo "================================================================"
 }
 
 # nep_update_seen <scored> <seen-file> <date>
@@ -412,8 +490,8 @@ nep_run_pipeline() {
     fi
     if [ "$BAD" -gt 0 ]; then
       # Malformed records are not dropped silently: they become a finding.
-      printf 'unknown|security|neptune|record-format|%s result line(s) from the scans could not be read, so those checks are missing from this report|unreadable scan records|0|\n' \
-        "$BAD" >> "$SCORED"
+      printf 'unknown|security|neptune|record-format|%s result line(s) from the scans could not be read, so those checks are missing from this report|unreadable scan records|0||%s scan results could not be read|So those checks are missing from this report.\n' \
+        "$BAD" "$BAD" >> "$SCORED"
     fi
   fi
 
@@ -430,13 +508,13 @@ usage() {
   cat <<'USAGE'
 neptune.sh — run the Neptune scans, then report a verdict and scores.
 
-  ./neptune.sh                    run the suite (read-only; nothing is deleted)
-  ./neptune.sh --html             also write a readable HTML report: every
-                                  finding with what it means, what to do, and
-                                  the command to do it — plus every check that
-                                  PASSED, so the report proves what it covered.
-                                  No JavaScript, no external anything.
-  ./neptune.sh --json             also write structured findings as JSON
+  ./neptune.sh                    scan (read-only), then a one-screen summary.
+                                  Writes a text report, and — when python3 is
+                                  available — the HTML report, the JSON, and a
+                                  sanitized brief ready to share with an AI.
+  ./neptune.sh --verbose          stream every scan's full output as it runs
+  ./neptune.sh --no-html          text report only
+  ./neptune.sh --html, --json     accepted for compatibility (now automatic)
   ./neptune.sh --sanitize         with --html/--json: replace host, user, home
                                   paths, IPs and MACs, for sharing
   ./neptune.sh --out DIR          write reports to DIR (default ~/Desktop)
@@ -444,8 +522,9 @@ neptune.sh — run the Neptune scans, then report a verdict and scores.
                                   known-good vendor quirk (no re-scan)
   ./neptune.sh --acknowledge 2,5  several at once
   ./neptune.sh --fix              walk your LAST run's findings one at a time:
-                                  the fix, its exact command, then a y/N for
+                                  the fix, its exact command, then a choice for
                                   each; re-scan at the end to see before/after
+  ./neptune.sh --fix --only 9,12  queue just those items, in that order
   ./neptune.sh --replay FILE      re-render a saved --json file (or a findings
                                   file) without scanning: no sudo, no state
                                   written — for demos, CI and second opinions
@@ -474,8 +553,8 @@ See SECURITY.md for the full footprint and how to verify all of this.
 USAGE
 }
 
-JSON_OUT=false; HTML_OUT=false; SANITIZE_OUT=false
-ACK_ARG=""; REPLAY=""; OUT_DIR=""
+JSON_OUT=false; HTML_OUT=false; SANITIZE_OUT=false; VERBOSE=false; NO_HTML=false
+ACK_ARG=""; REPLAY=""; OUT_DIR=""; BRIEF_NAME=""; JSON_NAME=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --json)        JSON_OUT=true ;;
@@ -484,7 +563,9 @@ while [ $# -gt 0 ]; do
     --acknowledge) shift; ACK_ARG="${1:-}"; [ -n "$ACK_ARG" ] || { echo "--acknowledge needs a number" >&2; exit 64; } ;;
     --replay)      shift; REPLAY="${1:-}";  [ -n "$REPLAY" ]  || { echo "--replay needs a file" >&2; exit 64; } ;;
     --out)         shift; OUT_DIR="${1:-}"; [ -n "$OUT_DIR" ] || { echo "--out needs a directory" >&2; exit 64; } ;;
-    --fix)         exec "$DIR/fix.sh" ;;
+    --fix)         shift; exec "$DIR/fix.sh" "$@" ;;
+    --verbose|-v)  VERBOSE=true ;;
+    --no-html)     NO_HTML=true ;;
     --version)     echo "neptune $NEPTUNE_VERSION"; exit 0 ;;
     -h|--help)     usage; exit 0 ;;
     *)             echo "Unknown option: $1  (try --help)" >&2; exit 64 ;;
@@ -554,7 +635,7 @@ trap 'rm -rf "$TMP"' EXIT
 FINDINGS="$TMP/findings.txt"
 : > "$FINDINGS"
 
-# render <json|html> <outfile> — the one renderer behind both formats.
+# render <json|html|brief> <outfile> — the one renderer behind every format.
 render() {
   local FMT=$1 OUTF=$2 SAN
   SAN=$($SANITIZE_OUT && echo --sanitize || true)
@@ -565,7 +646,8 @@ render() {
     --quirks "$QUIRKS" --version "$VERSION_STRING" \
     ${RENDER_HISTORY:+--history "$RENDER_HISTORY"} \
     ${RENDER_SEEN:+--seen "$RENDER_SEEN"} \
-    ${RENDER_REPLAY:+--replay-source "$RENDER_REPLAY"} > "$OUTF"
+    ${RENDER_REPLAY:+--replay-source "$RENDER_REPLAY"} \
+    ${BRIEF_NAME:+--brief-name "$BRIEF_NAME"} ${JSON_NAME:+--json-name "$JSON_NAME"} > "$OUTF"
 }
 
 ############################################################################
@@ -585,11 +667,16 @@ if [ -n "$REPLAY" ]; then
   esac
   nep_run_pipeline "$FINDINGS" "$RALLOW" "$TMP" "replay of $(basename "$REPLAY")"
   RENDER_REPLAY="$(basename "$REPLAY")"
-  echo
-  echo "${BOLD}${VCOL}${VERDICT}${RST}   (replayed from $(basename "$REPLAY") — nothing was scanned)"
-  render_verdict "$SCORED" "$SCORES" "$LISTING" "$INTEGRITY" "$WHY" | tail -n +4
-  if $HTML_OUT; then render html "$OUT_DIR/neptune_report_replay.html" && echo "HTML report: $OUT_DIR/neptune_report_replay.html"; fi
-  if $JSON_OUT; then render json "$OUT_DIR/neptune_findings_replay.json" && echo "JSON: $OUT_DIR/neptune_findings_replay.json"; fi
+  printf '\n  %sReplayed from %s — nothing was scanned.%s\n' "$DIM" "$(basename "$REPLAY")" "$RST"
+  render_verdict "$SCORED" "$SCORES" "$LISTING" "$INTEGRITY" "$WHY"
+  if $HTML_OUT; then
+    BRIEF_NAME=neptune_ai_brief_replay.md
+    $JSON_OUT && JSON_NAME=neptune_findings_replay.json
+    render html "$OUT_DIR/neptune_report_replay.html" && echo "HTML report: $OUT_DIR/neptune_report_replay.html"
+    # The brief is always sanitized: it exists to be pasted somewhere else.
+    SANITIZE_OUT=true render brief "$OUT_DIR/$BRIEF_NAME" && echo "AI brief:    $OUT_DIR/$BRIEF_NAME"
+  fi
+  if $JSON_OUT; then render json "$OUT_DIR/neptune_findings_replay.json" && echo "JSON:        $OUT_DIR/neptune_findings_replay.json"; fi
   exit "$(nep_exit_status)"
 fi
 
@@ -608,10 +695,20 @@ REPORT="$OUT_DIR/neptune_full_report_${STAMP}.txt"
 JSON_PATH="$OUT_DIR/neptune_findings_${STAMP}.json"
 HTML_PATH="$OUT_DIR/neptune_report_${STAMP}.html"
 
-echo "${BOLD}Neptune $VERSION_STRING — $(hostname) — $(date '+%Y-%m-%d %H:%M')${RST}"
-echo "Combined report will be saved to:"
-echo "  $REPORT"
-echo
+# The richer outputs come automatically when python3 is usable. They are for
+# reading (HTML), for tools (JSON) and for a second opinion (the AI brief,
+# always sanitized). The scan itself never needs python.
+AI_OUT=false
+if ! $NO_HTML && python_ok; then HTML_OUT=true; JSON_OUT=true; AI_OUT=true; fi
+AI_PATH="$OUT_DIR/neptune_ai_brief_${STAMP}.md"
+# The HTML names the other two files, so it can point at them.
+if $AI_OUT; then BRIEF_NAME=$(basename "$AI_PATH"); fi
+if $JSON_OUT; then JSON_NAME=$(basename "$JSON_PATH"); fi
+RUN_START=$SECONDS
+
+printf '\n  %sNeptune%s %s%s %s %s %s macOS %s%s\n' "$BOLD" "$RST" "$DIM" "$VERSION_STRING" "$SYM_SEP" \
+  "$(scutil --get ComputerName 2>/dev/null || hostname -s)" "$SYM_SEP" "$(sw_vers -productVersion 2>/dev/null)" "$RST"
+printf '  %sRead-only. Asks for your password once, to see system-wide details; changes nothing.%s\n\n' "$DIM" "$RST"
 
 # One sudo prompt up front; the scans reuse the cached timestamp. If it is
 # refused, nothing was scanned — say so with its own exit code rather than 1,
@@ -657,15 +754,24 @@ HEADER_LINES=5
 run_script() {
   local NAME=$1 ID=$2 CAT=$3 LABEL=$4 RC BEFORE AFTER
   if [ ! -x "$DIR/$NAME" ]; then
-    echo "  ${YEL}(not run: $NAME is missing or not executable)${RST}"
+    printf '  %s%s%s %s %s%s missing — not run%s\n' "$DIM" "$STEP" "$RST" "$5" "$YEL" "$SYM_WARN" "$RST"
     printf 'unknown|%s|neptune|scan-missing|%s did not run (missing or not executable), so none of its checks are in this report\n' \
       "$CAT" "$NAME" >> "$FINDINGS"
     return
   fi
-  echo "${BOLD}${CYN}>>> Running $LABEL...${RST}"
+  local T0=$SECONDS STEP_LABEL=$5 NA NM NU
   BEFORE=$(awk -F'|' -v s="$ID" '$3==s' "$FINDINGS" | wc -l | tr -d ' ')
-  "$DIR/$NAME" 2>&1 | tee "$TMP/$NAME.raw"
-  RC=${PIPESTATUS[0]}
+  if $VERBOSE; then
+    echo "${BOLD}${CYN}>>> $LABEL${RST}"
+    "$DIR/$NAME" 2>&1 | tee "$TMP/$NAME.raw"
+    RC=${PIPESTATUS[0]}
+  else
+    # One line per scan; the full output goes to the report. --verbose
+    # streams it instead.
+    printf '  %s%s%s %s%s ' "$DIM" "$STEP" "$RST" "$STEP_LABEL" "$ELL"
+    "$DIR/$NAME" > "$TMP/$NAME.raw" 2>&1 </dev/null
+    RC=$?
+  fi
   AFTER=$(awk -F'|' -v s="$ID" '$3==s' "$FINDINGS" | wc -l | tr -d ' ')
   if [ "$RC" -ne 0 ]; then
     printf 'unknown|%s|neptune|scan-failed|%s stopped with exit status %s before finishing, so some of its checks are missing from this report\n' \
@@ -673,6 +779,22 @@ run_script() {
   elif [ "$AFTER" -eq "$BEFORE" ]; then
     printf 'unknown|%s|neptune|scan-silent|%s finished but recorded no results at all, so its checks cannot be counted as passed\n' \
       "$CAT" "$NAME" >> "$FINDINGS"
+  fi
+  if ! $VERBOSE; then
+    NA=$(awk -F'|' -v s="$ID" '$3==s && $1=="attention"' "$FINDINGS" | wc -l | tr -d ' ')
+    NM=$(awk -F'|' -v s="$ID" '$3==s && $1=="notice"' "$FINDINGS" | wc -l | tr -d ' ')
+    NU=$(awk -F'|' -v s="$ID" '$3==s && $1=="unknown"' "$FINDINGS" | wc -l | tr -d ' ')
+    if [ "$RC" -ne 0 ]; then
+      printf '%sdidn'"'"'t finish%s\n' "$YEL" "$RST"
+    elif [ "$((NA + NM + NU))" -eq 0 ]; then
+      printf '%s%s all clear%s %s%ss%s\n' "$GRN" "$SYM_OK" "$RST" "$DIM" "$((SECONDS - T0))" "$RST"
+    else
+      local OUT=""
+      [ "$NA" -gt 0 ] && OUT="$NA to look at"
+      [ "$NM" -gt 0 ] && OUT="${OUT:+$OUT, }$NM small"
+      [ "$NU" -gt 0 ] && OUT="${OUT:+$OUT, }$NU couldn't check"
+      printf '%s %s%ss%s\n' "$OUT" "$DIM" "$((SECONDS - T0))" "$RST"
+    fi
   fi
   strip_ansi < "$TMP/$NAME.raw" > "$TMP/$NAME.txt"
   {
@@ -682,22 +804,23 @@ run_script() {
     echo "################################################################"
     cat "$TMP/$NAME.txt"
   } >> "$REPORT"
-  echo
+  $VERBOSE && echo
+  return 0
 }
 
-run_script sentry.sh        sentry  security    "SENTRY (change detection, process->network, staleness)"
-run_script redflag_scan.sh  redflag security    "RED-FLAG SCAN (posture, persistence, processes, listeners, interception)"
-run_script network_check.sh network network     "NETWORK CHECK (NAT, DNS, latency, connections)"
-run_script audit_system.sh  audit   bloat       "SYSTEM AUDIT (resources, extensions, disk and bloat)"
-run_script check_updates.sh updates maintenance "UPDATE SCAN (macOS, brew, App Store, self-updaters)"
+STEP="1/5"; run_script sentry.sh        sentry  security    "SENTRY (change detection, process->network, staleness)"        "What changed since last time, and what's online"
+STEP="2/5"; run_script redflag_scan.sh  redflag security    "RED-FLAG SCAN (posture, persistence, processes, listeners, interception)" "Security settings, login items, processes, listeners"
+STEP="3/5"; run_script network_check.sh network network     "NETWORK CHECK (NAT, DNS, latency, connections)"                 "Your network: routing, DNS, latency"
+STEP="4/5"; run_script audit_system.sh  audit   bloat       "SYSTEM AUDIT (resources, extensions, disk and bloat)"           "Disk space, extensions, what's heavy"
+STEP="5/5"; run_script check_updates.sh updates maintenance "UPDATE SCAN (macOS, brew, App Store, self-updaters)"            "Updates for macOS, Homebrew, the App Store"
 
 nep_run_pipeline "$FINDINGS" "$ALLOW" "$TMP" "$RUN_LABEL"
 
-# Text report: header, verdict, then every scan's full output.
+# Text report: header, verdict, then every scan's full output. Plain text —
+# the summary is rendered again with styling switched off.
 {
   head -"$HEADER_LINES" "$REPORT"
-  echo
-  render_verdict "$SCORED" "$SCORES" "$LISTING" "$INTEGRITY" "$WHY"
+  ( nep_plain; render_verdict "$SCORED" "$SCORES" "$LISTING" "$INTEGRITY" "$WHY" )
   tail -n +"$((HEADER_LINES + 1))" "$REPORT"
 } > "$TMP/final.txt" && mv "$TMP/final.txt" "$REPORT"
 
@@ -709,19 +832,19 @@ nep_update_seen "$SCORED" "$SEEN" "$(date '+%Y-%m-%d')"
 RENDER_SEEN="$SEEN"; RENDER_HISTORY="$HISTORY"
 if $JSON_OUT; then render json "$JSON_PATH"; fi
 if $HTML_OUT; then render html "$HTML_PATH"; fi
+if $AI_OUT; then SANITIZE_OUT=true render brief "$AI_PATH"; fi
 nep_append_history "$HISTORY" "$SCORES" "$(date '+%Y-%m-%d %H:%M')" "$VKEY"
 
+render_verdict "$SCORED" "$SCORES" "$LISTING" "$INTEGRITY" "$WHY"
 echo
-echo "${BOLD}${VCOL}${VERDICT}${RST}"
-render_verdict "$SCORED" "$SCORES" "$LISTING" "$INTEGRITY" "$WHY" | tail -n +4
-echo
-echo "${BOLD}Full report:${RST} $REPORT"
-$HTML_OUT && echo "${BOLD}HTML report:${RST} $HTML_PATH$($SANITIZE_OUT && echo '   (sanitized)')"
-$JSON_OUT && echo "${BOLD}JSON findings:${RST} $JSON_PATH$($SANITIZE_OUT && echo '   (sanitized)')"
-if ! $HTML_OUT; then
-  echo
-  echo "For a readable report with what each finding means and what to do:"
-  echo "  ./neptune.sh --html"
+printf '  %sReports%s %s%s · %ss%s\n' "$BOLD" "$RST" "$DIM" "$OUT_DIR" "$((SECONDS - RUN_START))" "$RST"
+if $HTML_OUT; then
+  printf '         %s  %sthe full picture, with what each fix does%s\n' "$(basename "$HTML_PATH")" "$DIM" "$RST"
+  printf '         %s  %ssanitized, ready to paste into an AI for a second opinion%s\n' "$(basename "$AI_PATH")" "$DIM" "$RST"
+else
+  printf '         %s\n' "$(basename "$REPORT")"
+  printf '         %sInstall the Command Line Tools (xcode-select --install) for the HTML report.%s\n' "$DIM" "$RST"
 fi
+echo
 
 exit "$(nep_exit_status)"

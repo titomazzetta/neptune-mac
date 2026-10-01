@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""neptune_render.py — turn Neptune's scored records into JSON or HTML.
+"""neptune_render.py — turn Neptune's scored records into HTML, JSON or an AI brief.
 
 neptune.sh does the collection and the scoring in bash and awk, because those
-must work on a stock Mac with nothing installed. This file does the two
-optional outputs, which need real escaping and are only reached with --json,
---html or --replay. Standard library only; Python 3.6+.
+must work on a stock Mac with nothing installed. This file does the richer
+outputs — the HTML report, the JSON, and the AI brief — which need real
+escaping and are skipped when python3 is missing. Standard library only;
+Python 3.6+.
 
 It is a module rather than a heredoc inside neptune.sh so it can be imported
 and unit-tested directly (tests/test_render.py). The tests used to extract
@@ -64,7 +65,10 @@ def _lines(path):
 
 
 def load_scored(path):
-    """severity|category|scan|check|title|key|acked|vendor"""
+    """severity|category|scan|check|title|key|acked|vendor|headline|context
+
+    The last two are the plain-words phrasing from scripts/phrases.tsv; a
+    record from before they existed reads as headline = title."""
     out = []
     for line in _lines(path):
         f = line.split("|")
@@ -74,6 +78,8 @@ def load_scored(path):
             "severity": f[0], "category": f[1], "scan": f[2], "check": f[3],
             "title": f[4], "key": f[5], "acknowledged": f[6] == "1",
             "vendor": f[7],
+            "headline": (f[8] if len(f) > 8 else "") or f[4],
+            "context": f[9] if len(f) > 9 else "",
         })
     return out
 
@@ -151,6 +157,28 @@ def shell_out(*args):
         return ""
 
 
+def _mask_ip(m):
+    """Hide the address but keep what it MEANS. 127.0.0.1 versus 0.0.0.0 is
+    "only this Mac" versus "anything on the network", and private versus
+    public is the whole double-NAT question; a sanitized report that erases
+    those has erased the finding. The numbers that identify a network go."""
+    ip = m.group(0)
+    o = [int(x) for x in ip.split(".")]
+    if ip in ("0.0.0.0", "255.255.255.255") or o[0] == 127:
+        return ip
+    if o[0] == 10:
+        return "10.x.x.x"
+    if o[0] == 192 and o[1] == 168:
+        return "192.168.x.x"
+    if o[0] == 172 and 16 <= o[1] <= 31:
+        return "172.16.x.x"
+    if o[0] == 100 and 64 <= o[1] <= 127:
+        return "100.64.x.x (carrier NAT)"
+    if o[0] == 169 and o[1] == 254:
+        return "169.254.x.x"
+    return "x.x.x.x"
+
+
 def make_sanitizer(enabled, host="", user=""):
     """Return a function that strips identifying detail from a string.
 
@@ -172,8 +200,9 @@ def make_sanitizer(enabled, host="", user=""):
             text = re.sub(re.escape(short), "example-mac", text, flags=re.I)
         if user:
             text = re.sub(r"\b%s\b" % re.escape(user), "exampleuser", text, flags=re.I)
-        text = re.sub(r"/Users/[^/\s\"']+", "/Users/exampleuser", text, flags=re.I)
-        text = re.sub(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", "0.0.0.0", text)
+        # /Users/Shared is a fixed system folder, not anyone's name.
+        text = re.sub(r"/Users/(?!Shared\b)[^/\s\"']+", "/Users/exampleuser", text, flags=re.I)
+        text = re.sub(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", _mask_ip, text)
         text = re.sub(r"\b(?:[0-9a-fA-F]{1,2}:){5}[0-9a-fA-F]{1,2}\b",
                       "xx:xx:xx:xx:xx:xx", text)
         return text
@@ -653,6 +682,304 @@ def remediation_command_problems():
 
 
 # ---------------------------------------------------------------------------
+# The explanation ladder
+#
+# Every finding is explained at three depths, and the HTML report lets the
+# reader pick one (Simple / Detailed / Technical):
+#   In short       SHORT below — one plain sentence, no jargon
+#   Why it matters the remediation table's `means` and `do`
+#   Under the hood the evidence: check id, scan, the record as written, paths
+# A fix is explained the same way: what it does in a line, then every part of
+# the command (explain_command), then how to undo it (UNDO).
+#
+# Like the remediation table these are keyed by check id, so rewording a title
+# never orphans an explanation, and tests/test_render.py asserts the coverage.
+# ---------------------------------------------------------------------------
+SHORT = {
+    "filevault": "The startup disk isn't encrypted, so anyone holding this Mac can read its files.",
+    "sip": "macOS's self-protection is off, so software with admin rights can change the system itself.",
+    "gatekeeper": "macOS isn't checking where apps come from before they open.",
+    "firewall": "Your Mac answers connection attempts from anything on the same network. The firewall stops that, and the apps you use keep working.",
+    "auto-security-updates": "Apple's background security fixes aren't set to install on their own.",
+    "auto-update-check": "This Mac has stopped checking for updates by itself.",
+    "auto-login": "This Mac starts straight into your account without asking for a password.",
+    "guest-account": "Anyone can sit down and use this Mac through the Guest login, no password needed.",
+    "remote-access": "A way to log in to or control this Mac over the network is switched on.",
+    "persistence-launchd": "Something starts automatically and isn't signed by its maker, so macOS can't confirm who built it. Usually a vendor habit, sometimes not.",
+    "persistence-orphan": "A login item points at a program that's gone. Usually left behind by an uninstall.",
+    "persistence-unresolved": "A login item couldn't be read, so Neptune can't say what it runs.",
+    "privileged-helpers": "A helper that runs with full admin rights isn't signed by its maker.",
+    "cron-user": "A scheduled job runs in the background under your account.",
+    "cron-root": "A scheduled job runs in the background with admin rights.",
+    "etc-crontab": "A system-wide scheduled job is set up.",
+    "login-hook": "An old-style script runs every time someone logs in.",
+    "startup-items": "A legacy startup item is installed, a mechanism macOS retired years ago.",
+    "process-location": "A program is running from a folder where installed software doesn't normally live.",
+    "process-hidden": "A running program has a hidden name or location.",
+    "process-deleted": "A program is still running although its file has been deleted.",
+    "process-root": "A program running with full admin rights isn't signed by its maker.",
+    "listeners": "Some programs are waiting for connections from other machines.",
+    "network-signing": "A program that's online isn't signed by its maker.",
+    "baseline-diff": "Login items or listeners changed since your last known-good snapshot.",
+    "proxy": "Your web traffic is being routed through a proxy.",
+    "net-extensions": "A network extension can see or filter your traffic.",
+    "config-profiles": "A configuration profile is installed. Profiles can change settings and what the Mac trusts.",
+    "etc-hosts": "The hosts file redirects some web addresses.",
+    "browser-extensions": "Browser extensions were found that can read the pages you visit.",
+    "double-nat": "Your traffic passes through two routers. Often harmless, but it can break calls, gaming and port forwarding.",
+    "cgnat": "Your internet provider shares one public address across many customers.",
+    "dns": "Looking up web addresses was slow or failed.",
+    "lan-latency": "Your own network is slower to answer than it should be.",
+    "gateway-latency": "Your router is slower to answer than it should be.",
+    "stale-apps": "Some apps haven't been opened in a long time.",
+    "caches": "Apps are holding disk space in caches they can rebuild.",
+    "brew-cache": "Homebrew is keeping installers for versions you've already moved past.",
+    "dev-junk": "Developer build leftovers are taking disk space. They regenerate on their own.",
+    "logs": "Log files have grown large, usually because one app writes too much.",
+    "kexts": "Kernel extensions are loaded: old-style drivers with deep access to the system.",
+    "macos-updates": "Apple has updates waiting for this Mac.",
+    "macos-upgrade": "A newer major version of macOS is available. When to move is your call.",
+    "brew-outdated": "Homebrew has newer versions of tools you installed.",
+    "app-updates": "Some apps that update themselves are behind their latest release.",
+    "mas-outdated": "App Store apps have updates waiting.",
+    "brew-doctor": "Homebrew reports a problem with its own setup.",
+    "scan-failed": "One of Neptune's scans stopped early, so its checks are missing from this report.",
+    "scan-missing": "One of Neptune's scans didn't run, so its checks are missing from this report.",
+    "scan-silent": "One of Neptune's scans finished without recording anything, so it can't count as passed.",
+    "record-format": "Some scan results couldn't be read, so those checks are missing.",
+}
+
+UNKNOWN_SHORT = "Neptune couldn't finish this check, so it doesn't know either way. That's not the same as fine."
+
+ACK_UNDO = "Delete its line from ~/.neptune/allow and it counts again."
+
+UNDO = {
+    "firewall": "System Settings > Network > Firewall, or: sudo /usr/libexec/ApplicationFirewall/socketfilterfw --setglobalstate off",
+    "guest-account": "System Settings > Users & Groups > Guest User.",
+    "auto-login": "System Settings > Users & Groups > Automatically log in as.",
+    "auto-update-check": "sudo softwareupdate --schedule off",
+    "auto-security-updates": "The same switch in System Settings > General > Software Update.",
+    "gatekeeper": "Not recommended, but: System Settings > Privacy & Security.",
+    "brew-cache": "Nothing to undo. Homebrew downloads an installer again if it ever needs one.",
+    "caches": "Nothing to undo. Apps rebuild their caches as they run; the first launch can be a little slower.",
+    "stale-apps": "Reinstall from the App Store or the developer. uninstall.sh prints every path it removed.",
+    "macos-updates": "Apple's minor updates can't be rolled back. That's why it asks before each one.",
+    "brew-outdated": "brew pin <name> holds a formula at its version from now on. Homebrew has no one-step downgrade.",
+    "mas-outdated": "App Store updates can't be rolled back.",
+    "baseline-diff": "Run ./sentry.sh --rebaseline again whenever you want a new snapshot.",
+}
+for _c in ("persistence-launchd", "privileged-helpers", "network-signing", "process-root",
+           "process-hidden", "listeners", "double-nat"):
+    UNDO.setdefault(_c, ACK_UNDO)
+
+# What each program in a suggested command is, and what each flag does. A
+# command the report shows has every part explained, or the test fails.
+PROGRAMS = {
+    "sudo": "runs just this one command with administrator rights; macOS asks for your password",
+    "fdesetup": "Apple's FileVault (disk encryption) tool",
+    "csrutil": "Apple's System Integrity Protection tool",
+    "spctl": "Apple's Gatekeeper tool, the check that stops unidentified apps",
+    "socketfilterfw": "Apple's control for the built-in application firewall",
+    "defaults": "reads or writes a macOS preference file",
+    "lsof": "lists open files; here, network connections",
+    "codesign": "Apple's code-signing tool",
+    "plutil": "Apple's property-list tool, which reads launch-item files",
+    "crontab": "the table of scheduled jobs",
+    "ls": "lists a folder",
+    "scutil": "reads the live network configuration",
+    "systemextensionsctl": "lists system extensions: network filters, drivers, security tools",
+    "profiles": "lists configuration profiles (device management)",
+    "cat": "prints a file",
+    "traceroute": "shows each router your traffic passes through",
+    "brew": "Homebrew, the package manager",
+    "du": "measures how much disk something uses",
+    "kextstat": "lists loaded kernel extensions",
+    "softwareupdate": "Apple's software-update tool",
+    "mas": "a command-line client for the Mac App Store",
+    "sysadminctl": "Apple's user-account administration tool",
+    "open": "opens an app, a file or a System Settings pane",
+    "uninstall.sh": "Neptune's guided uninstaller",
+    "clean_caches.sh": "Neptune's cache cleaner",
+    "check_updates.sh": "Neptune's update checker",
+    "sentry.sh": "Neptune's change-detection scan",
+    "neptune.sh": "Neptune itself",
+}
+
+FLAGS = {
+    ("socketfilterfw", "--setglobalstate"): "switches the firewall on or off; per-app rules you already have are kept",
+    ("socketfilterfw", "--getglobalstate"): "prints whether the firewall is on",
+    ("fdesetup", "status"): "prints whether FileVault is on",
+    ("csrutil", "status"): "prints whether System Integrity Protection is on",
+    ("spctl", "--global-enable"): "turns Gatekeeper back on",
+    ("spctl", "--status"): "prints whether Gatekeeper is on",
+    ("defaults", "read"): "prints the preference file",
+    ("lsof", "-i"): "only network connections",
+    ("lsof", "-P"): "show port numbers, not service names",
+    ("lsof", "-n"): "show addresses, skip name lookups",
+    ("lsof", "-sTCP:LISTEN"): "only ports waiting for incoming connections",
+    ("codesign", "-dvv"): "display the signature in detail: who signed it, and how",
+    ("plutil", "-p"): "print the file in readable form",
+    ("crontab", "-l"): "list the jobs",
+    ("ls", "-la"): "include hidden files, with owners and dates",
+    ("scutil", "--proxy"): "print the proxy settings in use",
+    ("scutil", "--dns"): "print the DNS servers in use",
+    ("systemextensionsctl", "list"): "list them",
+    ("profiles", "list"): "list installed profiles",
+    ("traceroute", "-n"): "show addresses, skip name lookups",
+    ("traceroute", "-m"): "stop after this many hops; the first few are your own network",
+    ("brew", "cleanup"): "removes old versions and cached downloads",
+    ("brew", "--prune=all"): "every cached download, not only ones older than 120 days",
+    ("brew", "-n"): "dry run: list what would go, remove nothing",
+    ("brew", "outdated"): "lists installed packages that have newer versions",
+    ("brew", "upgrade"): "installs those newer versions",
+    ("brew", "doctor"): "checks Homebrew's own setup and prints warnings",
+    ("brew", "install"): "installs a package",
+    ("brew", "--cask"): "the package is a Mac app rather than a command-line tool",
+    ("brew", "--adopt"): "take over the copy already in /Applications instead of installing a second one",
+    ("du", "-sh"): "one total per item, in readable units (K, M, G)",
+    ("softwareupdate", "-l"): "list available updates; installs nothing",
+    ("softwareupdate", "--schedule"): "turns automatic checking on or off",
+    ("mas", "outdated"): "lists App Store apps with updates",
+    ("mas", "upgrade"): "installs those updates",
+    ("sysadminctl", "-guestAccount"): "turns the Guest login on or off",
+    ("sysadminctl", "-autologin"): "turns automatic login on or off",
+    ("open", "-a"): "open an app by its name",
+    ("uninstall.sh", "--dry-run"): "list every file it would remove, then stop; nothing is deleted",
+    ("clean_caches.sh", "--apply"): "after the list, lets you pick caches by number and type yes; without it, it only lists",
+    ("check_updates.sh", "--upgrade"): "after checking, offers to install, asking per source; never a major macOS upgrade",
+    ("sentry.sh", "--rebaseline"): "record what's there now as the new known-good snapshot",
+    ("neptune.sh", "--fix"): "go through your last run's items one at a time; nothing changes without a y",
+    ("neptune.sh", "--only"): "just these item numbers, in this order",
+    ("neptune.sh", "--acknowledge"): "mark these items as known; they stay listed and stop costing points",
+}
+
+
+def _program(token):
+    return os.path.basename(token)
+
+
+def explain_command(command):
+    """[(part, what it does)] for a suggested command, or [] when any part of
+    it is not in the tables above — the test asserts that never happens for a
+    command the report can show."""
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return []
+    rows = []
+    if words and words[0] == "sudo":
+        rows.append(("sudo", PROGRAMS["sudo"]))
+        words = words[1:]
+    if not words or _program(words[0]) not in PROGRAMS:
+        return []
+    prog = _program(words[0])
+    rows.append((prog, PROGRAMS[prog]))
+    i = 1
+    while i < len(words):
+        w = words[i]
+        if (prog, w) in FLAGS:
+            part = w
+            # A flag's value travels with it: "--setglobalstate on", "-m 4".
+            while i + 1 < len(words) and (prog, words[i + 1]) not in FLAGS \
+                    and not words[i + 1].startswith("-") and len(words[i + 1]) <= 12 \
+                    and "/" not in words[i + 1]:
+                i += 1
+                part += " " + words[i]
+            rows.append((part, FLAGS[(prog, w)]))
+        elif w.startswith("-"):
+            return []
+        else:
+            rows.append((w, "what it acts on"))
+        i += 1
+    return rows
+
+
+def short_for(check, severity, means):
+    """The "In short" rung: the hand-written sentence, or the first sentence of
+    the longer explanation when a check has none."""
+    if severity == "unknown" and check not in UNKNOWN_NATIVE:
+        return UNKNOWN_SHORT
+    if check in SHORT:
+        return SHORT[check]
+    m = re.match(r"(.+?[.!?])(\s|$)", means or "")
+    return m.group(1) if m else (means or "")
+
+
+# ---------------------------------------------------------------------------
+# What fixing something is worth
+#
+# The same arithmetic as nep_compute_scores in neptune.sh, so "Do these next"
+# can say what each item is worth. Two implementations of one formula is a
+# risk; tests/test_render.py runs both on the fixture and requires the same
+# scores, so they cannot drift apart silently.
+# ---------------------------------------------------------------------------
+def simulate_scores(records, drop=()):
+    score = {c: 100 for c in CATEGORIES}
+    seen = {}
+    for i, r in enumerate(records):
+        if i in drop:
+            continue
+        sev, cat = r["severity"], r["category"]
+        score.setdefault(cat, 100)
+        if sev == "pass" or r["acknowledged"] or sev == "info":
+            continue
+        seen[(cat, sev)] = seen.get((cat, sev), 0) + 1
+        if seen[(cat, sev)] == 1:
+            w = 12 if sev == "attention" else 8 if sev == "unknown" else 4
+        else:
+            w = 4 if sev == "attention" else 3 if sev == "unknown" else 1
+        score[cat] -= w
+    return {c: max(0, s) for c, s in score.items()}
+
+
+CAT_LABEL = {"security": "Security", "network": "Network", "bloat": "Tidiness",
+             "maintenance": "Updates"}
+
+UPDATE_CHECKS = ("macos-updates", "brew-outdated", "mas-outdated")
+KEEP_CHECKS = ("persistence-launchd", "privileged-helpers", "network-signing", "process-root",
+               "process-hidden", "listeners")
+
+
+def next_steps(records, findings, limit=6):
+    """Rows for "Do these next": findings that share one action are one row
+    (a vendor's helpers, the update run), ranked by what doing it is worth."""
+    open_items = [f for f in findings if "n" in f and not f["acknowledged"]
+                  and f["severity"] in ("attention", "unknown", "notice")]
+    groups, order = {}, []
+    for f in open_items:
+        if f["severity"] == "unknown":
+            gid, label, how = "u:%d" % f["n"], "Re-check: " + f["headline"], "run again"
+        elif f.get("vendor") and f["check"] in KEEP_CHECKS:
+            v = f["vendor"]["name"]
+            gid, label, how = "v:" + v, "Keep or remove %s's background items" % v, "your call"
+        elif f["check"] in UPDATE_CHECKS:
+            gid, label, how = "updates", "Install the waiting updates", "asks first"
+        else:
+            gid, label, how = "f:%d" % f["n"], f["headline"], "1 step"
+        if gid not in groups:
+            groups[gid] = {"label": label, "how": how, "numbers": [], "drop": set(),
+                           "severity": f["severity"]}
+            order.append(gid)
+        groups[gid]["numbers"].append(f["n"])
+        groups[gid]["drop"].add(f["_i"])
+    base = simulate_scores(records)
+    rank = {"attention": 0, "notice": 1, "unknown": 2}
+    rows = []
+    for gid in order:
+        g = groups[gid]
+        after = simulate_scores(records, g["drop"])
+        gains = [(CAT_LABEL.get(c, c), after[c] - base.get(c, 100))
+                 for c in after if after[c] - base.get(c, 100) > 0]
+        g["gains"] = gains
+        g["worth"] = sum(n for _c, n in gains)
+        if len(g["numbers"]) > 1 and gid.startswith("v:"):
+            g["how"] = "%d items, your call" % len(g["numbers"])
+        rows.append(g)
+    rows.sort(key=lambda g: (-g["worth"], rank.get(g["severity"], 3), g["numbers"][0]))
+    return rows[:limit]
+
+
+# ---------------------------------------------------------------------------
 # Building the report model — one dict that both JSON and HTML render from
 # ---------------------------------------------------------------------------
 def build_report(args):
@@ -666,10 +993,11 @@ def build_report(args):
     prev, runs_on_record = load_previous_run(args.history)
 
     findings, checks = [], []
-    for r in records:
+    for i, r in enumerate(records):
         item = {
             "severity": r["severity"], "category": r["category"], "scan": r["scan"],
             "check": r["check"], "title": clean(r["title"]),
+            "headline": clean(r["headline"]), "context": clean(r["context"]),
         }
         if r["severity"] == "pass":
             checks.append(item)
@@ -689,6 +1017,7 @@ def build_report(args):
             for c in advice["commands"]:
                 c["command"] = clean(c["command"])
         item["advice"] = advice
+        item["_i"] = i          # position in records: for "what is fixing it worth"
         findings.append(item)
 
     # Posture: the worst state recorded under each control's check id.
@@ -740,14 +1069,138 @@ def build_report(args):
         "checks_passed": checks,
         "previous_run": previous,
         "runs_on_record": runs_on_record,
+        # Underscored keys are for rendering only and never reach the JSON.
+        "_records": records,
+        "_brief_name": getattr(args, "brief_name", ""),
+        "_json_name": getattr(args, "json_name", ""),
     }
 
 
 # ---------------------------------------------------------------------------
 # JSON
 # ---------------------------------------------------------------------------
+def public(report):
+    """The report without its render-only keys: _records holds the raw,
+    unsanitized titles and must never be written out."""
+    out = {k: v for k, v in report.items() if not k.startswith("_")}
+    out["findings"] = [{k: v for k, v in f.items() if not k.startswith("_")}
+                       for f in report["findings"]]
+    return out
+
+
 def render_json(report):
-    return json.dumps(report, indent=2, ensure_ascii=False) + "\n"
+    return json.dumps(public(report), indent=2, ensure_ascii=False) + "\n"
+
+
+def plural(n, one, many):
+    return "%d %s" % (n, one if n == 1 else many)
+
+
+# ---------------------------------------------------------------------------
+# Recommended commands
+#
+# A short, curated playbook for THIS run: only the commands that apply to what
+# was found, each with what it does, what kind of change it is, every part of
+# it explained, and how to undo it. No command appears here that is not also
+# in the remediation table's rules: one command, no pipes, a known kind.
+# ---------------------------------------------------------------------------
+PANE_LOGIN = "x-apple.systempreferences:com.apple.LoginItems-Settings.extension"
+PERSIST_CHECKS = KEEP_CHECKS + ("persistence-orphan", "persistence-unresolved", "process-location",
+                                "process-deleted")
+
+
+def playbook(report):
+    open_f = [f for f in report["findings"] if not f["acknowledged"] and f["severity"] != "info"]
+    checks = {f["check"] for f in open_f}
+    out = []
+
+    def add(title, command, kind, short, detail, undo=""):
+        out.append({"title": title, "command": command, "kind": kind, "short": short,
+                    "detail": detail, "undo": undo})
+
+    if any("n" in f for f in open_f):
+        add("Fix things one at a time", "./neptune.sh --fix", "neptune",
+            "Goes through every numbered item: shows the fix and its exact command, then waits "
+            "for y, n or q. Nothing changes without a y.",
+            "Settings are changed with Apple's own documented command; removals are handed to "
+            "Neptune's confirmed scripts, which show everything first. Each applied fix is logged "
+            "in ~/.neptune/fix-log.tsv, and at the end it offers to scan again so the next "
+            "report shows before and after. Add --only 3,7 to queue just those numbers, in "
+            "that order.")
+    if checks & set(UPDATE_CHECKS + ("app-updates",)):
+        add("Install updates", "./check_updates.sh --upgrade", "software",
+            "Checks macOS, Homebrew and the App Store, then asks before installing from each one. "
+            "Never starts a major macOS upgrade.",
+            "Apple minor updates may need a restart; it says so before asking. Apps that "
+            "update themselves are listed with their latest version so you can update them "
+            "from their own menu.",
+            UNDO["macos-updates"])
+    if "brew-cache" in checks:
+        add("Clear Homebrew's old downloads", "brew cleanup --prune=all", "software",
+            "Deletes installers and old versions Homebrew no longer needs. Installed software "
+            "is untouched.",
+            "Add -n first to see the list without removing anything.", UNDO["brew-cache"])
+    if "caches" in checks:
+        add("Clear caches you choose", "./clean_caches.sh --apply", "neptune",
+            "Lists the biggest caches in your Library. You pick by number and type yes; "
+            "nothing else is touched.",
+            "Only folders inside your own ~/Library/Caches, never as root. Apps rebuild what "
+            "they need.", UNDO["caches"])
+    apps = [app_in(f["title"]) for f in open_f
+            if f["check"] in PERSIST_CHECKS + ("stale-apps",) and app_in(f["title"])]
+    if apps or "stale-apps" in checks:
+        add("Remove an app completely", "./uninstall.sh %s --dry-run" % shlex.quote(apps[0] if apps
+                                                                               else "App Name"),
+            "neptune",
+            "Lists every file an app left across the system, then stops. Run it again without "
+            "--dry-run to remove them; it asks before deleting anything.",
+            "Finds the app's support files, launch items, helpers and caches by whole-word name "
+            "match, so a search for Mail never touches MailMate.", UNDO["stale-apps"])
+    if checks & set(PERSIST_CHECKS):
+        add("Stop something starting at login", "open " + PANE_LOGIN, "look",
+            "Opens Login Items & Extensions. Switch an item off under Allow in the Background "
+            "to stop it launching, without uninstalling anything.",
+            "This is the reversible middle ground between keeping and removing: the software "
+            "stays installed and simply stops starting by itself.",
+            "Switch it back on in the same place.")
+        add("Look at a running program", "open -a 'Activity Monitor'", "look",
+            "To stop a program, quit it normally: Cmd-Q, or Quit in Activity Monitor. Neptune "
+            "never force-kills anything.",
+            "A process that comes straight back is being launched by something, usually a "
+            "login item. Find and switch off that first; killing the process only resets the "
+            "clock.")
+    if checks & {"listeners", "remote-access", "network-signing"}:
+        add("See what's listening", "sudo lsof -i -P -n -sTCP:LISTEN", "look",
+            "Lists every program waiting for incoming connections, with its port. Reads only.",
+            "Ports on 127.0.0.1 are only reachable from this Mac. Ports on * or 0.0.0.0 are "
+            "reachable from your network, which is what the firewall is for.")
+    keepable = [f["n"] for f in open_f if "n" in f and f["check"] in KEEP_CHECKS]
+    if keepable:
+        add("Keep something you recognize", "./neptune.sh --acknowledge %d" % keepable[0], "neptune",
+            "Marks an item as known on this Mac. It stays in the report and stops costing points.",
+            "Use it for software you chose (audio drivers, licence managers, Docker). It is a "
+            "statement about your Mac, so Neptune never does it for you.", ACK_UNDO)
+    add("Measure again", "./neptune.sh", "look",
+        "Runs the scan again and compares it with this report.",
+        "Every run is kept in ~/.neptune/history.tsv, so the scores show what moved.")
+    return out
+
+
+def ai_reasons(report):
+    open_f = [f for f in report["findings"] if not f["acknowledged"]]
+    bg = sum(1 for f in open_f if f["check"] in PERSIST_CHECKS)
+    unk = sum(1 for f in open_f if f["severity"] == "unknown")
+    old = sum(1 for f in open_f if f["check"] in UPDATE_CHECKS + ("app-updates", "stale-apps"))
+    out = []
+    if bg:
+        out.append(plural(bg, "background item Neptune can't vouch for",
+                          "background items Neptune can't vouch for"))
+    if unk:
+        out.append(plural(unk, "check that couldn't finish", "checks that couldn't finish"))
+    if old:
+        out.append(plural(old, "finding about old or unused software",
+                          "findings about old or unused software"))
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -756,92 +1209,204 @@ def render_json(report):
 # No JavaScript, no external stylesheet, no webfont, no image request — the
 # file makes no network connections when opened, which is a claim a security
 # report should be able to make about itself. Collapsible sections are
-# <details> elements, which need no script. CI asserts all of that.
+# <details> elements and the reading-level switch is three radio inputs and
+# CSS, so none of it needs script. CI asserts all of that.
 # ---------------------------------------------------------------------------
 CSS = """
-:root{--bg:#fbfbfa;--card:#fff;--ink:#1a1a1a;--mute:#5d5d5d;--line:#e3e1dd;
---good:#2f7d4f;--warn:#a8721a;--bad:#a63232;--accent:#2d4f7c;--code:#f4f3f0}
+:root{--bg:#f7f6f3;--card:#fff;--ink:#1d1d1f;--muted:#6e6e73;--faint:#8e8e93;--line:#e7e5e0;
+--accent:#1f5d7a;--good:#2f7d4f;--warn:#a86500;--bad:#b3261e;--unk:#6b5ca5;--code:#f2f1ee;
+--shadow:0 1px 2px rgba(0,0,0,.04),0 4px 16px rgba(0,0,0,.04)}
+@media (prefers-color-scheme:dark){:root{--bg:#141416;--card:#1c1c1f;--ink:#f2f2f4;--muted:#a1a1a6;
+--faint:#8a8a90;--line:#2c2c30;--accent:#7fb7d4;--good:#6fcf97;--warn:#f2b35b;--bad:#ff8a80;
+--unk:#b3a7f0;--code:#232327;--shadow:none}}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);
-font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}
-.wrap{max-width:860px;margin:0 auto;padding:32px 20px 80px}
-h1{font-size:26px;margin:0 0 4px;letter-spacing:-.2px}
-h2{font-size:19px;margin:40px 0 6px;letter-spacing:-.1px}
-.sub{color:var(--mute);font-size:14px;margin:0 0 28px}
-.verdict{padding:18px 20px;border-radius:8px;border:1px solid var(--line);
-background:var(--card);margin:0 0 20px;border-left-width:5px}
-.verdict.good{border-left-color:var(--good)}.verdict.warn{border-left-color:var(--warn)}
-.verdict.bad{border-left-color:var(--bad)}
-.verdict strong{font-size:20px;display:block;margin-bottom:2px}
-.verdict .tally{color:var(--mute);font-size:14px}
-.integrity{background:#fff4f2;border:1px solid var(--bad);color:var(--bad);border-radius:8px;
-padding:12px 16px;margin:0 0 20px;font-size:15px}
-.scores{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin:0 0 8px}
-.score{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px 16px}
-.score .n{font-size:28px;font-weight:600;letter-spacing:-1px}
-.score .n small{font-size:14px;font-weight:400;color:var(--mute);letter-spacing:0}
-.score .cat{text-transform:uppercase;font-size:11px;letter-spacing:.09em;color:var(--mute)}
-.score .pc{font-size:12px;color:var(--mute)}
-.bar{display:block;height:6px;background:var(--line);border-radius:3px;overflow:hidden;margin:8px 0 6px}
-.fill{display:block;height:100%}
-.f0{background:var(--bad)}.f1{background:var(--warn)}.f2{background:var(--good)}
-.d{font-size:12px}.d.up{color:var(--good)}.d.down{color:var(--bad)}.d.flat{color:var(--mute)}
-.note{color:var(--mute);font-size:14px;margin:0 0 20px}
-.posture{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:8px;margin:0 0 8px}
-.ctl{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 12px;
-display:flex;gap:10px;align-items:flex-start;font-size:14px}
-.ctl .st{flex:0 0 auto;font-size:11px;text-transform:uppercase;letter-spacing:.07em;
-padding:2px 6px;border-radius:3px;border:1px solid var(--line);margin-top:2px;min-width:74px;text-align:center}
-.st.pass{color:var(--good);border-color:var(--good)}.st.fail{color:var(--bad);border-color:var(--bad)}
-.st.warn{color:var(--warn);border-color:var(--warn)}.st.unknown{color:var(--warn)}
-.st.not-checked,.st.acknowledged{color:var(--mute)}
-.ctl .lb{font-weight:600}.ctl .dt{color:var(--mute);font-size:13px;display:block}
-details.f{background:var(--card);border:1px solid var(--line);border-radius:8px;margin:0 0 8px}
-details.f>summary{padding:12px 16px;cursor:pointer;list-style:none;display:flex;gap:10px}
-details.f>summary::-webkit-details-marker{display:none}
-details.f>summary::before{content:"\\25B8";color:var(--mute);flex:0 0 auto}
-details.f[open]>summary::before{content:"\\25BE"}
-.num{color:var(--mute);flex:0 0 auto;font-variant-numeric:tabular-nums;min-width:1.6em}
-.tag,.vendor{display:inline-block;font-size:10px;text-transform:uppercase;letter-spacing:.08em;
-padding:2px 6px;border-radius:3px;vertical-align:2px;margin-right:6px}
-.tag{background:var(--code);color:var(--mute)}
-.vendor{border:1px solid var(--line);color:var(--accent)}
-.body{padding:2px 16px 16px 40px;border-top:1px solid var(--line)}
-.body p{margin:12px 0 0}
-.lbl{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--mute);margin:16px 0 2px;font-weight:600}
-.streak{font-size:12px;color:var(--mute);margin:10px 0 0}
-.vnote{background:var(--code);border-left:3px solid var(--accent);padding:10px 12px;
-border-radius:0 5px 5px 0;margin:12px 0 0;font-size:14px}
-pre{background:var(--code);border:1px solid var(--line);border-radius:6px;padding:10px 12px;
-overflow-x:auto;margin:4px 0 2px;font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap}
-code{font:13px ui-monospace,SFMono-Regular,Menlo,monospace}
-.eff{font-size:13px;color:var(--mute);margin:0 0 10px}
-.kind{display:inline-block;font-size:10px;text-transform:uppercase;letter-spacing:.07em;
-padding:1px 5px;border-radius:3px;margin-right:6px;border:1px solid var(--line)}
-.kind.look{color:var(--accent)}.kind.setting{color:var(--warn)}
-.kind.software{color:var(--bad)}.kind.neptune{color:var(--good)}
-.box{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:18px 20px;margin:0 0 16px}
-.box p:first-child{margin-top:0}
-ul.passed{margin:6px 0 0;padding-left:20px;font-size:14px}ul.passed li{margin:0 0 4px}
-ol.steps{margin:8px 0 0;padding-left:22px}ol.steps li{margin:0 0 10px}
-footer{margin-top:52px;padding-top:20px;border-top:1px solid var(--line);color:var(--mute);font-size:13px}
-@media print{body{background:#fff}details.f{break-inside:avoid}details.f>summary::before{content:""}}
-@media (prefers-color-scheme:dark){
-:root{--bg:#16161a;--card:#1d1d22;--ink:#e8e6e3;--mute:#9b9892;--line:#31313a;
---good:#6bbf87;--warn:#d9a441;--bad:#e07a7a;--accent:#8ab0e0;--code:#24242b}
-.integrity{background:#2a1a1a}}
+font:15px/1.55 -apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",Arial,sans-serif}
+.wrap{max-width:880px;margin:0 auto;padding:40px 20px 80px}
+h1,h2,h3,h4{font-weight:600;letter-spacing:-.01em;margin:0}
+code,pre{font:13px/1.5 ui-monospace,"SF Mono",Menlo,monospace}
+.muted{color:var(--muted)}.faint{color:var(--faint)}
+.lvl{position:absolute;opacity:0;pointer-events:none}
+.switch{display:inline-flex;background:var(--card);border:1px solid var(--line);border-radius:999px;padding:3px}
+.switch label{padding:5px 14px;border-radius:999px;cursor:pointer;color:var(--muted);font-size:13px}
+#lv1:checked~.wrap .switch label[for=lv1],#lv2:checked~.wrap .switch label[for=lv2],
+#lv3:checked~.wrap .switch label[for=lv3]{background:var(--ink);color:var(--bg)}
+#lv1:focus-visible~.wrap .switch label[for=lv1],#lv2:focus-visible~.wrap .switch label[for=lv2],
+#lv3:focus-visible~.wrap .switch label[for=lv3]{outline:2px solid var(--accent);outline-offset:2px}
+.r2,.r3{display:none}
+#lv2:checked~.wrap .r2,#lv3:checked~.wrap .r2,#lv3:checked~.wrap .r3{display:block}
+#lv2:checked~.wrap span.r2,#lv3:checked~.wrap span.r2,#lv3:checked~.wrap span.r3{display:inline}
+#lv2:checked~.wrap .r1only,#lv3:checked~.wrap .r1only{display:none}
+.top{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:28px}
+.brand{font-weight:600;letter-spacing:.02em}.meta{color:var(--muted);font-size:13px}
+.hero{background:var(--card);border-radius:18px;padding:28px;box-shadow:var(--shadow);border:1px solid var(--line)}
+.verdict{font-size:26px;font-weight:600;letter-spacing:-.02em;margin-bottom:6px}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:10px;vertical-align:middle}
+.dot.good{background:var(--good)}.dot.warn{background:var(--warn)}.dot.bad{background:var(--bad)}
+.synopsis{color:var(--muted);max-width:660px;margin:0 0 22px}
+.integrity{border:1px solid var(--bad);color:var(--bad);border-radius:12px;padding:12px 16px;margin:0 0 20px}
+.scores{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+@media (max-width:640px){.scores{grid-template-columns:repeat(2,1fr)}}
+.score .n{font-size:30px;font-weight:600;letter-spacing:-.02em}
+.score .n small{font-size:13px;color:var(--faint);font-weight:400}
+.score .lab{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+.bar{display:block;height:5px;background:var(--line);border-radius:3px;margin:6px 0 4px;overflow:hidden}
+.bar i{display:block;height:100%;border-radius:3px}
+.b0{background:var(--bad)}.b1{background:var(--warn)}.b2{background:var(--good)}
+.delta{font-size:12px;color:var(--faint)}.delta.up{color:var(--good)}.delta.down{color:var(--bad)}
+.tally{display:flex;gap:18px;flex-wrap:wrap;margin-top:20px;padding-top:16px;border-top:1px solid var(--line);font-size:13px;color:var(--muted)}
+.tally b{color:var(--ink);font-weight:600}
+section{margin-top:40px}
+section>h2{font-size:18px;margin-bottom:4px}
+section>p.sub,p.sub{color:var(--muted);margin:0 0 16px;font-size:14px}
+h3.grp{font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin:22px 0 10px}
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip{background:var(--card);border:1px solid var(--line);border-radius:999px;padding:6px 12px;font-size:13px}
+.chip b{font-weight:700;margin-right:4px}
+.chip.ok b{color:var(--good)}.chip.bad b{color:var(--bad)}.chip.warn b{color:var(--warn)}
+.chip.unk b{color:var(--unk)}.chip.muted{color:var(--muted)}
+.chipnote{font-size:13px;color:var(--muted);margin:10px 0 0}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:6px 20px;box-shadow:var(--shadow)}
+.next ol{margin:0;padding:0;list-style:none}
+.next ol{counter-reset:step}
+.next li{counter-increment:step;display:grid;grid-template-columns:22px 1fr auto 130px;gap:12px;align-items:baseline;padding:12px 0;border-bottom:1px solid var(--line)}
+.next li::before{content:counter(step);color:var(--faint);font-weight:600}
+.next li:last-child{border-bottom:0}
+.next .nums{display:block;color:var(--faint);font-size:12px;font-variant-numeric:tabular-nums}
+@media (max-width:640px){.next li{grid-template-columns:22px 1fr}.next .how,.next .gain{grid-column:2;text-align:left}}
+.gain{font-size:12px;color:var(--good);white-space:nowrap;text-align:right}
+.gain.none{color:var(--faint)}
+.queue{margin:12px 0 0;font-size:14px;color:var(--muted)}
+.cmd{display:flex;justify-content:space-between;align-items:center;gap:12px;background:var(--code);border-radius:10px;padding:10px 14px;margin:8px 0}
+.cmd code{overflow-wrap:anywhere;min-width:0}
+.kind{font-size:11px;text-transform:uppercase;letter-spacing:.06em;padding:2px 8px;border-radius:999px;white-space:nowrap}
+.k-look{background:rgba(47,125,79,.12);color:var(--good)}
+.k-setting{background:rgba(178,107,0,.12);color:var(--warn)}
+.k-software{background:rgba(179,38,30,.10);color:var(--bad)}
+.k-neptune{background:rgba(31,93,122,.12);color:var(--accent)}
+details.f{background:var(--card);border:1px solid var(--line);border-radius:14px;margin-bottom:10px;box-shadow:var(--shadow)}
+.plays{padding:0}
+details.play{border-bottom:1px solid var(--line)}details.play:last-child{border-bottom:0}
+details>summary{list-style:none;cursor:pointer}
+details>summary::-webkit-details-marker{display:none}
+details.f>summary{padding:16px 20px;display:grid;grid-template-columns:12px 1fr auto;gap:14px;align-items:baseline}
+details.play>summary{padding:14px 20px;display:grid;grid-template-columns:1fr auto;gap:12px;align-items:baseline}
+details.play>summary code{overflow-wrap:anywhere}
+details>summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:14px}
+.sev{width:10px;height:10px;border-radius:50%;display:inline-block}
+.sev.attention{background:var(--bad)}.sev.notice{background:var(--warn)}.sev.unknown{background:var(--unk)}
+.ttl{font-weight:600}
+.ctx{display:block;font-weight:400;color:var(--muted);font-size:14px;margin-top:2px}
+.num{color:var(--faint);font-size:13px;font-variant-numeric:tabular-nums}
+.tag{display:inline-block;font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);border:1px solid var(--line);border-radius:6px;padding:1px 6px;margin-left:8px;vertical-align:2px;font-weight:400}
+.body{padding:0 20px 20px 46px}
+details.play .body{padding:0 20px 18px}
+.rung{margin-top:14px}
+.rung h4{margin:0 0 4px;font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+.rung p{margin:0 0 6px}
+dl.evidence{background:var(--code);border-radius:10px;padding:12px 14px;margin:6px 0 0;overflow-x:auto}
+dl.evidence dt{color:var(--muted);font-size:12px}
+dl.evidence dd{margin:0 0 8px;font:13px/1.5 ui-monospace,"SF Mono",Menlo,monospace;word-break:break-all}
+.fix{border-top:1px solid var(--line);margin-top:18px;padding-top:6px}
+.eff{margin:0 0 8px;color:var(--muted);font-size:14px}
+table.flags{width:100%;border-collapse:collapse;font-size:13px;margin:4px 0 10px}
+table.flags td{padding:6px 8px;border-top:1px solid var(--line);vertical-align:top}
+table.flags td:first-child{font-family:ui-monospace,"SF Mono",Menlo,monospace;width:40%;overflow-wrap:anywhere}
+.undo{font-size:13px;color:var(--muted);margin:8px 0 0}.undo b{color:var(--ink)}
+.vnote{background:var(--code);border-left:3px solid var(--accent);padding:10px 12px;border-radius:0 8px 8px 0;margin:12px 0 0;font-size:14px}
+.box{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px;box-shadow:var(--shadow)}
+.box p{margin:0 0 10px}.box ol{margin:8px 0 0;padding-left:20px}.box li{margin:0 0 8px}
+details.quiet{border-top:1px solid var(--line)}
+details.quiet>summary{color:var(--muted);padding:12px 0}
+details.quiet>summary::before{content:"+ ";color:var(--faint)}
+details.quiet[open]>summary::before{content:"- "}
+.passlist{columns:2;font-size:13px;color:var(--muted);padding-left:18px;margin:0 0 14px}
+@media (max-width:640px){.passlist{columns:1}}
+.passlist li{break-inside:avoid;margin:0 0 4px}
+footer{margin-top:48px;font-size:12px;color:var(--faint);line-height:1.7}
+@media print{body{background:#fff}.switch{display:none}.r2,.r3{display:block!important}
+details.f,details.play{break-inside:avoid;box-shadow:none}}
 """
 
-SECTIONS = (
-    ("attention", "Needs attention", "Work through these first."),
-    ("unknown", "Could not be checked", "Treated as unknown, not as clean. A check that did not run is not a pass."),
-    ("notice", "Minor", "Worth knowing. Not urgent."),
-    ("info", "For information", "About this run, not about your machine. These cost no points."),
+GROUPS = (
+    ("attention", "Look at these"),
+    ("unknown", "Couldn't check"),
+    ("notice", "Small things"),
 )
 
+CHIP = {"pass": ("ok", "&#10003;"), "fail": ("bad", "!"), "warn": ("warn", "!"),
+        "unknown": ("unk", "?"), "not-checked": ("muted", "&ndash;"), "acknowledged": ("muted", "&#10003;")}
 
-def plural(n, one, many):
-    return "%d %s" % (n, one if n == 1 else many)
+# Short chip labels and the phrase the synopsis uses when the control passed.
+POSTURE_WORDS = {
+    "filevault": ("Disk encryption", "your disk is encrypted"),
+    "sip": ("System Integrity Protection", "System Integrity Protection is on"),
+    "gatekeeper": ("Gatekeeper", "Gatekeeper is checking apps"),
+    "firewall": ("Firewall", "the firewall is on"),
+    "auto-security-updates": ("Security updates", "security updates install themselves"),
+    "auto-login": ("Auto-login off", ""),
+    "guest-account": ("Guest account off", ""),
+    "remote-access": ("No remote access", ""),
+    "proxy": ("No traffic interception", "nothing is intercepting your traffic"),
+    "config-profiles": ("No unexpected profiles", ""),
+}
+
+PLAIN_STATE = {"pass": "checked and fine", "fail": "needs a look", "warn": "worth a look",
+               "unknown": "couldn't check", "not-checked": "no result this run",
+               "acknowledged": "kept on purpose"}
+
+LEAD_WORDS = ("The", "A", "An", "Your", "Some", "Two", "One", "No", "This", "Apple's")
+
+
+def _lower_lead(text):
+    first = text.split(" ", 1)[0]
+    return text[0].lower() + text[1:] if first in LEAD_WORDS else text
+
+
+def synopsis(report):
+    """Two or three plain sentences: what is solid, then what is left."""
+    good = [POSTURE_WORDS[p["check"]][1] for p in report["posture"]
+            if p["state"] == "pass" and POSTURE_WORDS.get(p["check"], ("", ""))[1]]
+    open_f = sorted([f for f in report["findings"] if not f["acknowledged"]],
+                    key=lambda f: f.get("n", 10 ** 6))
+    att = [f for f in open_f if f["severity"] == "attention"]
+    unk = [f for f in open_f if f["severity"] == "unknown"]
+    small = [f for f in open_f if f["severity"] == "notice"]
+    parts = []
+    if not report["integrity"]["ok"]:
+        parts.append("Some results were lost on the way to this report, so it can't vouch for "
+                     "the parts it didn't see. Run it again before relying on it.")
+    if good:
+        lead = good[:4]
+        said = lead[0] if len(lead) == 1 else ", ".join(lead[:-1]) + " and " + lead[-1]
+        parts.append(("The fundamentals are solid: " if len(good) >= 3 else "On the plus side, ")
+                     + said + ".")
+    if att:
+        heads = [_lower_lead(f["headline"]).rstrip(".") for f in att[:3]]
+        more = len(att) - len(heads)
+        said = heads[0] if len(heads) == 1 else ", ".join(heads[:-1]) + " and " + heads[-1]
+        parts.append("What needs you: %s%s." % (said, (", plus %d more" % more) if more > 0 else ""))
+    elif small:
+        parts.append("Nothing urgent. %s small %s to tidy when you have a minute."
+                     % (len(small), "thing" if len(small) == 1 else "things"))
+    elif not unk:
+        parts.append("Nothing needs you.")
+    if unk:
+        parts.append("%s couldn't run, so %s counted as fine."
+                     % (plural(len(unk), "check", "checks"), "it isn't" if len(unk) == 1 else "they aren't"))
+    return " ".join(parts)
+
+
+def _cmd_html(e, command, kind, effect="", flags=True):
+    out = ["<div class=\"cmd\"><code>%s</code><span class=\"kind k-%s\">%s</span></div>"
+           % (e(command), kind, e(KINDS[kind]))]
+    if effect:
+        out.append("<p class=\"eff\">%s</p>" % e(effect))
+    rows = explain_command(command) if flags else []
+    if rows:
+        out.append("<table class=\"flags r3\">" + "".join(
+            "<tr><td>%s</td><td>%s</td></tr>" % (e(a), e(b)) for a, b in rows) + "</table>")
+    return "".join(out)
 
 
 def render_html(report):
@@ -850,202 +1415,347 @@ def render_html(report):
     counts = report["counts"]
     scores = report["scores"]
     prev = report["previous_run"]
+    findings = report["findings"]
     W = []
     add = W.append
 
     vclass = {"needs_attention": "bad", "incomplete": "warn",
               "healthy_minor": "good", "healthy": "good"}.get(report["verdict"], "warn")
+    steps = next_steps(report["_records"], findings)
 
     add("<!DOCTYPE html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">\n"
         "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n"
-        "<title>Neptune report &mdash; " + e(meta["host"] or "Mac") + "</title>\n"
-        "<style>" + CSS + "</style></head><body><div class=\"wrap\">")
-    add("<h1>Neptune report</h1>")
-    sub = [e(meta["host"] or "this Mac")]
+        "<title>Neptune &mdash; " + e(meta["host"] or "Mac") + "</title>\n"
+        "<style>" + CSS + "</style></head><body>")
+    add("<input type=\"radio\" name=\"lvl\" id=\"lv1\" class=\"lvl\" checked>"
+        "<input type=\"radio\" name=\"lvl\" id=\"lv2\" class=\"lvl\">"
+        "<input type=\"radio\" name=\"lvl\" id=\"lv3\" class=\"lvl\"><div class=\"wrap\">")
+
+    # Header
+    sub = [e(meta["host"] or "This Mac")]
     if meta["macos"]:
         sub.append("macOS " + e(meta["macos"]))
-    sub.append(e(datetime.datetime.now().strftime("%d %B %Y, %H:%M")))
+    sub.append(e(datetime.datetime.now().strftime("%d %b %Y, %H:%M")))
     if meta["replay_of"]:
         sub.append("replayed from " + e(meta["replay_of"]))
-    add("<p class=\"sub\">" + " &middot; ".join(sub) + "</p>")
+    add("<div class=\"top\"><div><div class=\"brand\">Neptune</div><div class=\"meta\">%s</div></div>"
+        "<div class=\"switch\" role=\"group\" aria-label=\"How much detail\">"
+        "<label for=\"lv1\">Simple</label><label for=\"lv2\">Detailed</label>"
+        "<label for=\"lv3\">Technical</label></div></div>" % " &middot; ".join(sub))
 
-    add("<div class=\"verdict %s\"><strong>%s</strong><span class=\"tally\">"
-        "%d checks passed &middot; %d needing attention &middot; %d minor &middot; "
-        "%d could not be checked &middot; %d acknowledged</span></div>"
-        % (vclass, e(report["verdict_text"] or report["verdict"]),
-           counts.get("pass", 0), counts.get("attention", 0), counts.get("notice", 0),
-           counts.get("unknown", 0), counts.get("acknowledged", 0)))
-
+    # 1. First view
     if not report["integrity"]["ok"]:
-        add("<div class=\"integrity\"><strong>Report integrity failure.</strong> %s. "
-            "Some results are missing, so nothing in this report proves the machine is "
-            "clean.</div>" % e(report["integrity"]["problem"] or "Results were lost"))
-
-    # Scores
-    add("<div class=\"scores\">")
+        add("<div class=\"integrity\"><strong>This report is incomplete.</strong> %s, so nothing "
+            "here proves the Mac is clean. Run Neptune again.</div>"
+            % e((report["integrity"]["problem"] or "Results were lost").capitalize()))
+    add("<div class=\"hero\"><div class=\"verdict\"><span class=\"dot %s\"></span>%s</div>"
+        "<p class=\"synopsis\">%s</p><div class=\"scores\">"
+        % (vclass, e((report["verdict_text"] or report["verdict"]).rstrip(".")), e(synopsis(report))))
     for cat in CATEGORIES:
         n = scores.get(cat, 100)
-        fill = 0 if n < 50 else 1 if n < 80 else 2
-        delta = ""
         if prev and cat in prev["scores"]:
             d = n - prev["scores"][cat]
-            delta = ('<span class="d flat">no change since last run</span>' if d == 0 else
-                     '<span class="d %s">%+d since last run</span>' % ("up" if d > 0 else "down", d))
-        add("<div class=\"score\"><div class=\"cat\">%s</div><div class=\"n\">%d<small>/100</small></div>"
-            "<span class=\"bar\"><span class=\"fill f%d\" style=\"width:%d%%\"></span></span>"
-            "<span class=\"pc\">%s</span><br>%s</div>"
-            % (e(cat), n, fill, n, plural(report["passed_by_category"].get(cat, 0), "check passed",
-                                          "checks passed"), delta))
-    add("</div>")
+            delta = ('<span class="delta">no change</span>' if d == 0 else
+                     '<span class="delta %s">%+d since last run</span>' % ("up" if d > 0 else "down", d))
+        else:
+            delta = '<span class="delta">first measured</span>'
+        add("<div class=\"score\"><div class=\"lab\">%s</div><div class=\"n\">%d<small>/100</small></div>"
+            "<span class=\"bar\"><i class=\"b%d\" style=\"width:%d%%\"></i></span>%s</div>"
+            % (e(CAT_LABEL.get(cat, cat)), n, 0 if n < 50 else 1 if n < 80 else 2, n, delta))
+    exit_code = {"needs_attention": 1, "incomplete": 2}.get(report["verdict"], 0)
+    add("</div><div class=\"tally\"><span><b>%d</b> to look at</span><span><b>%d</b> small</span>"
+        "<span><b>%d</b> couldn&#x27;t check</span><span><b>%d</b> passed</span>"
+        "<span><b>%d</b> kept on purpose</span>"
+        "<span class=\"r3\">integrity %s &middot; exit code %d</span></div></div>"
+        % (counts.get("attention", 0), counts.get("notice", 0), counts.get("unknown", 0),
+           counts.get("pass", 0), counts.get("acknowledged", 0),
+           "ok" if report["integrity"]["ok"] else "FAILED", exit_code))
     if prev:
-        add("<p class=\"note\">Compared with the run on %s. %d earlier run%s on record.</p>"
-            % (e(prev["date"]), report["runs_on_record"], "" if report["runs_on_record"] == 1 else "s"))
-    elif not meta["replay_of"]:
-        add("<p class=\"note\">First recorded run. Work through the list below and run Neptune "
-            "again: this section will then show what each score did.</p>")
+        add("<p class=\"sub r2\" style=\"margin-top:10px\">Compared with the run on %s &middot; "
+            "%s on record.</p>" % (e(prev["date"]), plural(report["runs_on_record"], "earlier run",
+                                                             "earlier runs")))
 
-    # Posture
-    unchecked = sum(1 for p in report["posture"] if p["state"] == "not-checked")
-    add("<h2>Security posture</h2><p class=\"note\">The controls a reviewer asks about first. "
-        "Each state comes from the check itself, not from the absence of a complaint.%s</p>"
-        "<div class=\"posture\">"
-        % ("" if not unchecked else
-           " <strong>%s recorded no result on this run</strong> — %s"
-           % (plural(unchecked, "control", "controls"),
-              "the run this report was replayed from did not record them (runs before 1.0 recorded no passes)."
-              if meta["replay_of"] else "a scan did not reach it, which is a fault in the run.")))
-    labels = {"pass": "on / ok", "fail": "problem", "warn": "review", "unknown": "unknown",
-              "not-checked": "not checked", "acknowledged": "acknowledged"}
+    # 2. Protection at a glance
+    add("<section><h2>Protection at a glance</h2><p class=\"sub\">The ten controls a security "
+        "reviewer asks about first. Each state comes from a check that ran, not from the absence "
+        "of a complaint.</p><div class=\"chips\">")
     for p in report["posture"]:
-        add("<div class=\"ctl\"><span class=\"st %s\">%s</span><span><span class=\"lb\">%s</span>"
-            "<span class=\"dt\">%s</span></span></div>"
-            % (p["state"], labels[p["state"]], e(p["label"]), e(p["detail"])))
+        cls, mark = CHIP[p["state"]]
+        label = POSTURE_WORDS.get(p["check"], (p["label"], ""))[0]
+        add("<span class=\"chip %s\" title=\"%s\"><b>%s</b>%s<span class=\"r2 faint\"> &middot; %s</span></span>"
+            % (cls, e(p["detail"] or PLAIN_STATE[p["state"]]), mark, e(label), e(PLAIN_STATE[p["state"]])))
     add("</div>")
+    unchecked = sum(1 for p in report["posture"] if p["state"] == "not-checked")
+    if unchecked:
+        add("<p class=\"chipnote\">%s recorded no result on this run &mdash; %s</p>"
+            % (plural(unchecked, "control", "controls"),
+               "the run this was replayed from didn't record them." if meta["replay_of"]
+               else "a scan didn't reach it, which is a fault in the run, not a pass."))
+    add("</section>")
 
-    # Findings
-    findings = report["findings"]
-    kind_label = KINDS
-    for sev, heading, blurb in SECTIONS:
-        group = [f for f in findings if f["severity"] == sev and not f["acknowledged"]]
-        if not group:
-            continue
-        group.sort(key=lambda f: f.get("n", 10 ** 6))
-        add("<h2>%s</h2><p class=\"note\">%s</p>" % (e(heading), e(blurb)))
-        for f in group:
-            label = "%d." % f["n"] if "n" in f else "&middot;"
-            ven = f.get("vendor")
-            add("<details class=\"f\"%s><summary><span class=\"num\">%s</span><span>"
-                "<span class=\"tag\">%s</span>%s%s</span></summary><div class=\"body\">"
-                % (" open" if sev == "attention" else "", label, e(f["category"]),
-                   ("<span class=\"vendor\">known %s pattern</span>" % e(ven["name"])) if ven else "",
-                   e(f["title"])))
-            if ven and ven.get("note"):
-                add("<div class=\"vnote\"><strong>%s.</strong> %s This is a label, not a "
-                    "dismissal: the finding is still counted and still costs points. "
-                    "Acknowledging it is a decision about your machine, and stays yours "
-                    "to make.</div>" % (e(ven["name"]), e(ven["note"])))
-            runs = f.get("runs", 0)
-            if runs > 1:
-                add("<p class=\"streak\">Seen in %d runs, first on %s.%s</p>"
-                    % (runs, e(f.get("first_seen", "?")),
-                       " Still here after everything done since." if runs >= 4 else ""))
-            elif runs == 1:
-                add("<p class=\"streak\">First seen in this run.</p>")
-            a = f["advice"]
-            if a.get("unmapped"):
-                add("<p>No stock explanation for this one yet. The full text report has the "
-                    "surrounding output from the scan that raised it.</p>")
-            else:
-                add("<div class=\"lbl\">What this means</div><p>%s</p>" % e(a["means"]))
-                add("<div class=\"lbl\">What to do</div><p>%s</p>" % e(a["do"]))
-            cmds = list(a["commands"])
-            if "n" in f:
-                cmds.append({"command": "./neptune.sh --acknowledge %d" % f["n"], "kind": "neptune",
-                             "effect": "Marks this a known-good quirk on this machine. It stays "
-                                       "listed and counted; it only stops deducting. Undo by "
-                                       "deleting its line from ~/.neptune/allow."})
-            if cmds:
-                add("<div class=\"lbl\">Commands</div>")
-                for c in cmds:
-                    add("<pre>%s</pre><p class=\"eff\"><span class=\"kind %s\">%s</span>%s</p>"
-                        % (e(c["command"]), c["kind"], e(kind_label[c["kind"]]), e(c["effect"])))
-            add("</div></details>")
+    # 3. Do these next
+    if steps:
+        add("<section><h2>Do these next</h2><p class=\"sub\">Ordered by what they're worth. "
+            "Nothing changes without your yes.</p><div class=\"panel next\"><ol>")
+        for s in steps:
+            nums = ", ".join("#%d" % n for n in s["numbers"][:4]) + ("&hellip;" if len(s["numbers"]) > 4 else "")
+            gain = (" &middot; ".join("&asymp; %s +%d" % (e(c), g) for c, g in s["gains"])
+                    if s["gains"] else "")
+            add("<li><span>%s<span class=\"nums\">%s</span></span><span class=\"how faint\">%s</span>"
+                "<span class=\"gain%s\">%s</span></li>"
+                % (e(s["label"]), nums, e(s["how"]), "" if gain else " none",
+                   gain or "keeps the report honest"))
+        queue = ",".join(str(n) for s in steps for n in s["numbers"])
+        add("</ol></div><p class=\"queue\">Queue them, in this order:</p>")
+        add(_cmd_html(e, "./neptune.sh --fix --only " + queue, "neptune",
+                      "Like queuing tracks: Neptune plays these items one at a time and waits for "
+                      "your y on each. Change the numbers to build your own queue; every item below "
+                      "shows its number."))
+        add("</section>")
 
+    # 4. Recommended commands
+    plays = playbook(report)
+    add("<section><h2>Recommended commands</h2><p class=\"sub\">The handful of commands that "
+        "apply to this Mac right now. Open one to see what it does; switch to Technical for "
+        "every part of it. Run them from the Neptune <code>scripts</code> folder.</p>"
+        "<div class=\"panel plays\">")
+    for pl in plays:
+        add("<details class=\"play\"><summary><span><span class=\"ttl\">%s</span>"
+            "<span class=\"ctx\"><code>%s</code></span></span><span class=\"kind k-%s\">%s</span>"
+            "</summary><div class=\"body\"><p>%s</p><p class=\"r2 muted\">%s</p>%s%s</div></details>"
+            % (e(pl["title"]), e(pl["command"]), pl["kind"], e(KINDS[pl["kind"]]), e(pl["short"]),
+               e(pl["detail"]), "<div class=\"r3\">" + _cmd_html(e, pl["command"], pl["kind"]) + "</div>",
+               ("<p class=\"undo\"><b>Undo:</b> %s</p>" % e(pl["undo"])) if pl["undo"] else ""))
+    add("</div></section>")
+
+    # 5. The details, with the explanation ladder
+    open_f = [f for f in findings if not f["acknowledged"] and f["severity"] in ("attention", "unknown", "notice")]
+    if open_f:
+        add("<section><h2>The details</h2>"
+            "<p class=\"sub r1only\">Open any item. Switch to <b>Detailed</b> or <b>Technical</b> "
+            "above for more of the why and how.</p>"
+            "<p class=\"sub r2\">Each item explains itself in plain terms first; the evidence "
+            "follows for anyone who wants to verify it.</p>")
+        opened = 0
+        for sev, heading in GROUPS:
+            group = sorted([f for f in open_f if f["severity"] == sev], key=lambda f: f.get("n", 10 ** 6))
+            if not group:
+                continue
+            add("<h3 class=\"grp\">%s</h3>" % e(heading))
+            for f in group:
+                is_open = sev == "attention" and opened < 3
+                opened += 1 if is_open else 0
+                add(_finding_html(e, f, is_open))
+        add("</section>")
+
+    # 6. Second opinion
+    reasons = ai_reasons(report)
+    brief = report.get("_brief_name") or "neptune_ai_brief_<date>.md"
+    add("<section><h2>Get a second opinion</h2><div class=\"box\">")
+    if reasons:
+        add("<p><b>Worth doing on this run:</b> %s. A model can help you identify a helper by "
+            "its name and path, or tell you which old app actually matters.</p>" % e("; ".join(reasons)))
+    else:
+        add("<p>Nothing on this run really needs one, but the brief is there if you want it.</p>")
+    add("<p>Neptune wrote <code>%s</code> next to this report. It is the findings with a prompt "
+        "on top, already sanitized: your computer name, username, home folder, IP and MAC "
+        "addresses are replaced. Read it before you share it; it's plain text.</p><ol>"
+        "<li>Open the brief and paste all of it into an AI assistant (or attach the file).</li>"
+        "<li>Ask follow-ups about anything you don't recognize.</li>"
+        "<li>Act through the commands in this report. Prefer <code>--dry-run</code> and "
+        "<code>--fix</code>, which show you everything before they change anything.</li></ol>"
+        "<p class=\"r2 muted\">The prompt asks the model not to invent shell commands. A "
+        "made-up <code>sudo</code> one-liner is exactly what this tool exists to argue against: "
+        "if it misreads a path, the damage is real.</p>"
+        "<p class=\"r3 muted\">For tools rather than people, the same data is in <code>%s</code> "
+        "(schema %d). <code>./neptune.sh --replay</code> re-scores that file without scanning.</p>"
+        "</div></section>"
+        % (e(brief), e(report.get("_json_name") or "neptune_findings_<date>.json"), meta["schema"]))
+
+    # 7. Quiet sections
+    add("<section>")
     acked = [f for f in findings if f["acknowledged"]]
+    add("<details class=\"quiet\"><summary>Kept on purpose (%d)</summary>" % len(acked))
     if acked:
-        add("<h2>Acknowledged</h2><p class=\"note\">Known-good on this machine. Still found, "
-            "still listed, still counted &mdash; they only stop deducting. Nothing is ever "
-            "silently hidden.</p>")
+        add("<p class=\"sub\">Still found and listed every run; they just don't cost points. "
+            "Delete a line from <code>~/.neptune/allow</code> to count one again.</p><ul class=\"passlist\">")
         for f in acked:
-            add("<details class=\"f\"><summary><span class=\"num\">&middot;</span><span>"
-                "<span class=\"tag\">%s</span>%s</span></summary><div class=\"body\"><p>"
-                "Acknowledged in <code>~/.neptune/allow</code>. Delete that line to start "
-                "counting it again.</p></div></details>" % (e(f["category"]), e(f["title"])))
-
-    # What was checked
+            add("<li>%s</li>" % e(f["headline"]))
+        add("</ul>")
+    else:
+        add("<p class=\"sub\">Nothing yet. When something on the list is software you chose, "
+            "<code>./neptune.sh --acknowledge N</code> keeps it here instead.</p>")
+    add("</details>")
+    info = [f for f in findings if f["severity"] == "info"]
+    if info:
+        add("<details class=\"quiet\"><summary>About this run (%d)</summary><ul class=\"passlist\">"
+            % len(info))
+        for f in info:
+            add("<li>%s</li>" % e(f["headline"]))
+        add("</ul></details>")
     passed = report["checks_passed"]
+    add("<details class=\"quiet\"><summary>%s &mdash; show them</summary>"
+        % plural(len(passed), "check passed", "checks passed"))
     if passed:
-        add("<h2>What was checked and passed</h2><p class=\"note\">%d checks ran and found "
-            "nothing wrong. A report that only lists problems cannot prove anything about "
-            "the rest; this section is the proof.</p>" % len(passed))
+        add("<p class=\"sub\">A report that only lists problems proves nothing about the rest. "
+            "This is the rest.</p>")
         for cat in CATEGORIES:
             mine = [p for p in passed if p["category"] == cat]
-            if not mine:
-                continue
-            add("<details class=\"f\"><summary><span class=\"num\">%d</span><span>"
-                "<span class=\"tag\">%s</span>checks passed</span></summary><div class=\"body\">"
-                "<ul class=\"passed\">" % (len(mine), e(cat)))
-            for p in mine:
-                add("<li>%s</li>" % e(p["title"]))
-            add("</ul></div></details>")
+            if mine:
+                add("<h3 class=\"grp\">%s</h3><ul class=\"passlist\">" % e(CAT_LABEL[cat]))
+                for p in mine:
+                    add("<li>%s</li>" % e(p["title"]))
+                add("</ul>")
+    add("</details>")
+    add("<details class=\"quiet\"><summary>How the scores work</summary><p class=\"sub\">Each "
+        "area starts at 100. The first problem of a kind in an area costs the most (12 for "
+        "something to look at, 8 for a check that couldn't run, 4 for something small); "
+        "repeats cost less, because nine unsigned helpers are usually one vendor's habit, not "
+        "nine problems. A check that couldn't run costs points too: missing is not passed. "
+        "Every point lost traces to an item above.</p><p class=\"sub\">A low security score "
+        "is not the same as compromised. On a working Mac with pro-audio or virtualization "
+        "software, most of what lands here is vendor sloppiness &mdash; worth knowing, and "
+        "worth keeping on purpose rather than having a tool decide for you.</p></details>")
+    add("</section>")
 
-    add("<h2>Hand this to an AI assistant</h2><div class=\"box\">"
-        "<p>The same findings export as structured JSON, which a model reads far more "
-        "reliably than a screenshot of a terminal. The sanitised version replaces your "
-        "hostname, username, home-folder paths, IP and MAC addresses first.</p><ol class=\"steps\">"
-        "<li><div class=\"lbl\">Export it</div><pre>./neptune.sh --json --sanitize</pre>"
-        "<p class=\"eff\"><span class=\"kind look\">reads only</span>Every finding carries its "
-        "severity, category, check id and the same explanation and commands shown here.</p></li>"
-        "<li><div class=\"lbl\">Attach the file and ask for a plan</div><pre>"
-        "Here is a Neptune security audit of my Mac as JSON.\n\n"
-        "Walk me through it in priority order. For each finding tell me what it is,\n"
-        "whether it looks like a known vendor quirk or something worth chasing, and\n"
-        "what I should do about it.\n\n"
-        "Constraints: recommend Neptune&#x27;s own commands (./uninstall.sh &lt;app&gt; --dry-run,\n"
-        "./neptune.sh --acknowledge N) or documented single-purpose macOS commands.\n"
-        "Do not give me shell to paste that I cannot look up. If you are unsure about\n"
-        "a finding, say so rather than guessing.</pre>"
-        "<p class=\"eff\">That last paragraph is the important one. A model asked for "
-        "&ldquo;the fix&rdquo; will happily invent a <code>sudo</code> one-liner, and a "
-        "command you cannot verify is exactly the thing this tool exists to argue against.</p></li>"
-        "<li><div class=\"lbl\">Do the work, then run Neptune again</div><pre>./neptune.sh --html</pre>"
-        "<p class=\"eff\"><span class=\"kind look\">reads only</span>The next report compares "
-        "against this one. That is the loop: audit, understand, act, re-measure.</p></li>"
-        "</ol></div>")
-
-    add("<h2>How to read the scores</h2><div class=\"box\"><p>Each category starts at 100 "
-        "and loses points per finding. The first issue of a kind in a category costs full "
-        "weight; repeats cost about a third, because nine unsigned launch items are usually "
-        "one vendor habit rather than nine independent problems. A check that could not run "
-        "costs points too: missing is not the same as passed. Every deduction traces to a "
-        "finding listed above &mdash; a score whose arithmetic you cannot follow is "
-        "decoration, not information.</p><p>A low security score is not the same as "
-        "&ldquo;compromised&rdquo;. On a working Mac with pro-audio or virtualisation "
-        "software, most of what lands here is vendor sloppiness. That is worth knowing and "
-        "worth acknowledging deliberately &mdash; which is different from a tool quietly "
-        "deciding for you that it does not matter.</p></div>")
-
-    add("<footer><p><strong>This file contains no JavaScript</strong>, no external "
-        "stylesheet, no webfont and no image request. Opening it makes no network "
-        "connections; you can read the whole thing in a text editor.</p>"
-        "<p>Neptune is read-only apart from its own notes in <code>~/.neptune/</code> and "
-        "<code>~/.sentry/</code>. No daemon, nothing scheduled, nothing sent anywhere. "
-        "<code>SECURITY.md</code> in the repository lists the complete footprint, why each "
-        "script asks for <code>sudo</code>, and how to verify all of it yourself.</p>"
-        "<p>Neptune %s &middot; generated %s%s</p></footer></div></body></html>"
-        % (e(meta["version"] or "?"), e(meta["generated"]),
-           " &middot; sanitised" if meta["sanitized"] else ""))
+    add("<footer>Read-only scan &middot; nothing was changed &middot; this page runs no "
+        "JavaScript and makes no network requests; you can read all of it in a text editor."
+        "<br>Neptune %s &middot; report schema %d &middot; generated %s%s</footer></div></body></html>"
+        % (e(meta["version"] or "?"), meta["schema"], e(meta["generated"]),
+           " &middot; sanitized" if meta["sanitized"] else ""))
     return "\n".join(W) + "\n"
+
+
+def _finding_html(e, f, is_open):
+    a = f["advice"]
+    ven = f.get("vendor")
+    num = "#%d" % f["n"] if "n" in f else ""
+    out = ["<details class=\"f\"%s><summary><span class=\"sev %s\"></span><span class=\"ttl\">%s%s"
+           "%s</span><span class=\"num\">%s</span></summary><div class=\"body\">"
+           % (" open" if is_open else "", f["severity"], e(f["headline"]),
+              ("<span class=\"tag\">%s</span>" % e(ven["name"])) if ven else "",
+              ("<span class=\"ctx\">%s</span>" % e(f["context"])) if f.get("context") else "", num)]
+    add = out.append
+    add("<div class=\"rung\"><h4>In short</h4><p>%s</p></div>"
+        % e(short_for(f["check"], f["severity"], a.get("means", ""))))
+    if a.get("unmapped"):
+        add("<div class=\"rung r2\"><h4>Why it matters</h4><p>No stock explanation for this one yet. "
+            "The text report has the scan's full output around it.</p></div>")
+    else:
+        add("<div class=\"rung r2\"><h4>Why it matters</h4><p>%s</p><p>%s</p></div>"
+            % (e(a["means"]), e(a["do"])))
+    if ven and ven.get("note"):
+        add("<div class=\"vnote r2\"><strong>%s.</strong> %s It's a label, not a pass: the item "
+            "still counts until you decide to keep it.</div>" % (e(ven["name"]), e(ven["note"])))
+    ev = [("check", "%s &middot; %s" % (e(f["check"] or "(none)"), e(f["scan"]))),
+          ("recorded as", e(f["title"]))]
+    p = path_in(f["title"])
+    if p:
+        ev.append(("path", e(p)))
+    runs = f.get("runs", 0)
+    if runs:
+        ev.append(("seen", "first on %s, in %s" % (e(f.get("first_seen", "?")),
+                                                  plural(runs, "run", "runs"))))
+    ev.append(("keep key", e(f["key"])))
+    add("<div class=\"rung r3\"><h4>Under the hood</h4><dl class=\"evidence\">%s</dl></div>"
+        % "".join("<dt>%s</dt><dd>%s</dd>" % (k, v) for k, v in ev))
+
+    add("<div class=\"fix\"><div class=\"rung\"><h4>What you can run</h4></div>")
+    if "n" in f:
+        add(_cmd_html(e, "./neptune.sh --fix --only %d" % f["n"], "neptune",
+                      "Neptune's guided fix for just this item: it shows the exact change and "
+                      "waits for your y.", flags=False))
+    for c in a.get("commands", []):
+        add(_cmd_html(e, c["command"], c["kind"], c["effect"]))
+    if "n" in f and f["check"] in KEEP_CHECKS:
+        add(_cmd_html(e, "./neptune.sh --acknowledge %d" % f["n"], "neptune",
+                      "If you know what this is and use it: keep it. It stays listed and stops "
+                      "costing points."))
+    undo = UNDO.get(f["check"])
+    if undo:
+        add("<p class=\"undo\"><b>Undo:</b> %s</p>" % e(undo))
+    add("</div></div></details>")
+    return "".join(out)
+
+
+# ---------------------------------------------------------------------------
+# The AI brief — the findings and a prompt in one sanitized markdown file, so
+# a second opinion is a paste, not a project. Always rendered with --sanitize.
+# ---------------------------------------------------------------------------
+BRIEF_PROMPT = """You are a careful macOS security and maintenance advisor. Below is a report
+from Neptune, a read-only audit tool, run on my Mac. Identifying details have
+been replaced (example-mac, exampleuser, x.x.x.x; private ranges keep
+their prefix, e.g. 192.168.x.x, and 127.0.0.1 is left as is).
+
+Go through it in priority order. For each numbered item:
+1. What it most likely is, in plain words. For background items, use the name
+   and path to identify the vendor and what the component does.
+2. Whether it looks like a known vendor habit (audio drivers, licence managers,
+   Docker and VM helpers often run unsigned) or something worth chasing.
+3. What I should do, using Neptune's own commands where they apply:
+   ./neptune.sh --fix --only N, ./uninstall.sh "App Name" --dry-run,
+   ./neptune.sh --acknowledge N, ./check_updates.sh --upgrade,
+   or a single documented macOS command.
+
+Rules: do not give me shell I can't look up, no pipelines, no rm, no sudo
+one-liners. If you are not sure what something is, say so and tell me how to
+find out, rather than guessing. "Couldn't check" items are unknown, not fine.
+For out-of-date software, tell me which updates matter for security."""
+
+
+def render_brief(report):
+    meta = report["neptune"]
+    L = []
+    add = L.append
+    add("# Neptune findings, for a second opinion\n")
+    add("Sanitized: computer name, username, home folder, IP and MAC addresses are replaced. "
+        "Read it before you share it.\n")
+    add("Paste everything below the line into an AI assistant, or attach this file.\n")
+    add("---\n")
+    add(BRIEF_PROMPT + "\n")
+    add("## The Mac\n")
+    add("- macOS %s, Neptune %s" % (meta["macos"] or "?", meta["version"] or "?"))
+    add("- Verdict: %s" % (report["verdict_text"] or report["verdict"]))
+    add("- Scores (out of 100): " + ", ".join("%s %d" % (CAT_LABEL.get(c, c), report["scores"].get(c, 100))
+                                               for c in CATEGORIES))
+    if not report["integrity"]["ok"]:
+        add("- WARNING: the report is incomplete (%s). Treat the list as partial."
+            % (report["integrity"]["problem"] or "results were lost"))
+    posture = ", ".join("%s: %s" % (p["label"], PLAIN_STATE[p["state"]]) for p in report["posture"])
+    add("- Protection: " + posture + "\n")
+    open_f = sorted([f for f in report["findings"] if not f["acknowledged"] and f["severity"] != "info"],
+                    key=lambda f: f.get("n", 10 ** 6))
+    names = {"attention": "Needs attention", "unknown": "Couldn't check", "notice": "Small things"}
+    for sev in ("attention", "unknown", "notice"):
+        group = [f for f in open_f if f["severity"] == sev]
+        if not group:
+            continue
+        add("## %s (%d)\n" % (names[sev], len(group)))
+        for f in group:
+            add("### %s%s" % (("#%d " % f["n"]) if "n" in f else "", f["headline"]))
+            add("- area: %s; check: %s; scan: %s" % (CAT_LABEL.get(f["category"], f["category"]),
+                                                    f["check"] or "-", f["scan"]))
+            add("- as recorded: `%s`" % f["title"].replace("`", "'"))
+            if f.get("vendor"):
+                add("- matches a known vendor pattern: %s" % f["vendor"]["name"])
+            if f.get("runs", 0) > 1:
+                add("- seen in %d runs since %s" % (f["runs"], f.get("first_seen", "?")))
+            if f["advice"].get("means"):
+                add("- Neptune's note: %s" % f["advice"]["means"])
+            add("")
+    acked = [f for f in report["findings"] if f["acknowledged"]]
+    if acked:
+        add("## Kept on purpose by me (%d)\n" % len(acked))
+        for f in acked:
+            add("- " + f["headline"])
+        add("")
+    add("## Passed (%d checks)\n" % len(report["checks_passed"]))
+    for cat in CATEGORIES:
+        mine = [p["title"] for p in report["checks_passed"] if p["category"] == cat]
+        if mine:
+            add("- %s: %s" % (CAT_LABEL[cat], "; ".join(mine)))
+    add("")
+    return "\n".join(L) + "\n"
 
 
 # ---------------------------------------------------------------------------
@@ -1075,13 +1785,14 @@ def json_to_records(path):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--format", choices=("json", "html"))
+    ap.add_argument("--format", choices=("json", "html", "brief"))
     ap.add_argument("--scored"); ap.add_argument("--scores"); ap.add_argument("--listing")
     ap.add_argument("--verdict-key", default="incomplete"); ap.add_argument("--verdict", default="")
     ap.add_argument("--integrity", default="1"); ap.add_argument("--integrity-why", default="")
     ap.add_argument("--quirks", default=""); ap.add_argument("--version", default="")
     ap.add_argument("--history", default=""); ap.add_argument("--seen", default="")
     ap.add_argument("--replay-source", default="")
+    ap.add_argument("--brief-name", default=""); ap.add_argument("--json-name", default="")
     ap.add_argument("--sanitize", action="store_true")
     ap.add_argument("--json-to-records"); ap.add_argument("--records-out"); ap.add_argument("--allow-out")
     args = ap.parse_args(argv)
@@ -1101,7 +1812,8 @@ def main(argv=None):
     if not (args.format and args.scored and args.scores):
         ap.error("--format, --scored and --scores are required")
     report = build_report(args)
-    sys.stdout.write(render_json(report) if args.format == "json" else render_html(report))
+    render = {"json": render_json, "html": render_html, "brief": render_brief}[args.format]
+    sys.stdout.write(render(report))
     return 0
 
 

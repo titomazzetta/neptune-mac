@@ -282,6 +282,8 @@ HOME="$FH" ./scripts/fix.sh --plan --only 2,99 >/dev/null 2>&1
 t_is "--only with a number that is not in the list: exit 64, nothing runs" "64" "$?"
 HOME="$FH" ./scripts/fix.sh --only 1x >/dev/null 2>&1
 t_is "--only with something that is not a number: exit 64" "64" "$?"
+t_is "the listing carries plain words for the fixer" "8" \
+   "$(grep -v '^#' "$LISTING" | head -1 | awk -F'\t' '{print NF}')"
 mkdir -p "$T/nofix"
 HOME="$T/nofix" ./scripts/fix.sh --plan >/dev/null 2>&1
 t_is "no saved run yet: exit 64" "64" "$?"

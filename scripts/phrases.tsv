@@ -1,0 +1,99 @@
+# phrases.tsv — how each finding reads to a person.
+#
+# Titles recorded by the scans are precise and technical, and they are also the
+# acknowledge keys in ~/.neptune/allow, so they never change for wording's sake.
+# This table turns each one into a plain headline and a one-line context for
+# the terminal, the text report, the HTML and the JSON. One table, one voice.
+#
+# Columns (tab-separated; "-" means empty):
+#   check     the check id the record carries
+#   match     an ERE the title must match; the first matching row wins
+#   suffix    an ERE removed from the END of the title first  (sub, once)
+#   prefix    an ERE removed from the START of what is left  (sub, once)
+#   headline  what the person reads; {s} is the text left after both removals
+#   context   an optional second line; {s} works here too. When the finding
+#             matches a known vendor, a vendor sentence replaces this line —
+#             unless it starts with +, which marks a fact about this finding
+#             ("only this Mac can reach it") that is kept beside the vendor.
+#
+# Keep the regexes to the subset BWK awk and Python agree on: no {n,m}, no \d,
+# no lookaround. tests/test_render.py checks that the awk and python readings
+# of every fixture title are identical, and that every check id has a row.
+#
+# Voice: say what the thing is, then what is off about it. Plain words.
+# No capitals for emphasis. Short.
+filevault	being turned OFF	-	-	FileVault is being turned off	The disk is decrypting right now.
+filevault	OFF	-	-	Your disk isn't encrypted	Anyone who has this Mac in hand can read everything on it.
+filevault	could not	-	-	Couldn't tell whether your disk is encrypted	-
+sip	DISABLED	-	-	System Integrity Protection is off	Anything with admin rights can change macOS itself.
+sip	could not	-	-	Couldn't read System Integrity Protection's state	-
+gatekeeper	DISABLED	-	-	Gatekeeper is off	Apps open without macOS checking who made them.
+gatekeeper	could not	-	-	Couldn't read Gatekeeper's state	-
+firewall	OFF	-	-	The firewall is off	A common default. Worth turning on if this Mac joins public Wi-Fi.
+firewall	could not	-	-	Couldn't read the firewall's state	-
+auto-security-updates	.	-	-	Automatic security fixes are turned off	Apple's malware definitions and rapid fixes aren't installing on their own.
+auto-update-check	.	-	-	macOS isn't checking for updates on its own	-
+auto-login	.	'.*$	^.*account '	Automatic login is on for {s}	Whoever turns this Mac on lands at the desktop.
+guest-account	.	-	-	The Guest account is on	Anyone can log in without a password.
+remote-access	.	 is on and reachable.*$	-	{s} is reachable from your network	Fine if you use it; otherwise turn it off in Sharing.
+persistence-launchd	^AD-HOC	 \(/[^)]*\)$	^.* runs .*/	{s} starts at login with an anonymous signature	Signed, but not by any identified developer.
+persistence-launchd	.	 \(/[^)]*\)$	^.* runs .*/	{s} starts at login without a developer signature	macOS can't confirm who made it.
+persistence-orphan	.	 points at .*$	^ORPHANED persistence: 	{s} is set to launch an app that's gone	Usually left behind by software that was removed.
+persistence-unresolved	.	: could not resolve.*$	^Launch item 	Couldn't read what {s} launches	So its signature couldn't be checked, and it isn't counted as safe.
+privileged-helpers	^AD-HOC	-	^.*/	{s} runs as root with an anonymous signature	+A background helper with full system access.
+privileged-helpers	.	-	^.*/	{s} runs as root without a developer signature	+A background helper with full system access.
+cron-user	.	-	-	Your account has scheduled jobs (crontab)	Usually a developer tool. Worth a look.
+cron-root	.	-	-	Root has scheduled jobs (crontab)	Nothing on current macOS needs this.
+etc-crontab	.	-	-	/etc/crontab has scheduled jobs	Nothing on current macOS needs this.
+login-hook	.	-	-	A legacy login hook is set	An old mechanism, and one malware likes.
+startup-items	.	-	-	Legacy StartupItems are installed	Deprecated for over a decade.
+process-location	.	-	^Process running from suspicious location: 	A program is running from an unusual folder	{s}
+process-deleted	.	-	-	A running program's file is gone	Usually an app that updated itself and needs a restart.
+process-hidden	.	-	-	A program without a developer signature is running from a hidden folder	-
+process-root	.	 \(pid.*$	^.*/	{s} runs as root without a developer signature	-
+listeners	localhost-only	-	^.*binary:.*/	{s} accepts connections without a developer signature	+Only this Mac can reach it.
+listeners	.	-	^.*binary:.*/	{s} accepts connections without a developer signature	+Anything on your network can reach it.
+network-signing	cannot be found	-	-	A program on the network has no file on disk	+Its file was deleted or hidden while it runs.
+network-signing	^Ad-hoc	\)$	^.*/	{s} is online with an anonymous signature	-
+network-signing	.	\)$	^.*/	{s} is online without a developer signature	-
+baseline-diff	^NEW	-	^NEW since baseline: 	New since your last snapshot: {s}	If you installed it, accept it with ./sentry.sh --rebaseline.
+baseline-diff	gone	 baseline item.*$	-	{s} things from your snapshot are gone	Removed software, or apps that aren't running right now.
+baseline-diff	^Baseline	-	-	Took a fresh snapshot to compare against next time	-
+proxy	.	-	-	A system proxy is routing your web traffic	Fine for work or VPN setups. Otherwise, find out who set it.
+net-extensions	.	-	-	Network or security extensions are installed	Check each one is software you chose.
+config-profiles	could not	-	-	Couldn't list configuration profiles	-
+config-profiles	.	-	-	Configuration profiles are installed	They can set proxies, DNS and trusted certificates.
+etc-hosts	.	-	-	/etc/hosts has custom entries	Fine if you added them.
+browser-extensions	holds	' holds.*$	^[^ ]+ extension '	The {s} browser extension can see or reroute your browsing	-
+browser-extensions	python3	-	-	Browser extensions weren't inspected (python3 isn't installed)	-
+double-nat	could not	-	-	Couldn't trace the route to check for double NAT	-
+double-nat	.	-	-	Your ISP's box shows up as a second router	Often just IP passthrough. Your router's WAN address settles it.
+cgnat	^CGNAT	-	-	Your ISP shares one public address among customers (CGNAT)	Only matters for incoming connections.
+cgnat	.	-	-	Your ISP's box shows up as a second router	Often just IP passthrough. Your router's WAN address settles it.
+dns	not resolving	-	-	DNS isn't working	-
+dns	.	-	-	DNS is unreliable	Some lookups failed.
+gateway-latency	could not|No default	-	-	Couldn't measure how fast your router answers	-
+gateway-latency	.	 ms average.*$	^.*LAN \(	Your router answers slowly ({s} ms)	On a mesh, usually a node relaying over Wi-Fi.
+lan-latency	could not	-	-	Couldn't measure how fast your router answers	-
+lan-latency	.	ms average.*$	^LAN latency high \(	Your router answers slowly ({s} ms)	On a mesh, usually a node relaying over Wi-Fi.
+stale-apps	.	 app\(s\) have.*$	-	{s} apps haven't been opened in six months	Candidates to remove.
+caches	.	 — .*$	^User caches take 	Caches are using {s}	Safe to clear. Apps rebuild what they need.
+brew-cache	.	 that .*$	^Homebrew's download cache holds 	Homebrew is holding {s} of old downloads	Installers for versions you've already moved past.
+dev-junk	.	, all.*$	^Developer build caches take 	Developer build caches are using {s}	All of it regenerates.
+logs	.	 — .*$	^Your log folder has grown to 	Logs are using {s}	Usually one app logging too much.
+kexts	.	-	-	Third-party kernel extensions are loaded	Apple has deprecated them. Check each one is current.
+macos-updates	pending	-	^Apple software updates are pending \([0-9]+\): 	Ready to install: {s}	-
+macos-updates	.	-	-	Couldn't check for Apple updates	-
+macos-upgrade	.	 — .*$	^.*available: 	{s} is available	Upgrade when the apps you rely on support it.
+brew-outdated	have updates	 have updates available$	Homebrew 	{s} have Homebrew updates	-
+brew-outdated	.	-	-	Couldn't refresh Homebrew's package list	-
+app-updates	.	-	^.*catalog: 	Behind on updates: {s}	They update themselves; open each one, or let Homebrew adopt it.
+mas-outdated	have updates	 App Store apps.*$	-	{s} App Store apps have updates	-
+mas-outdated	.	-	-	Couldn't check the App Store for updates	-
+brew-doctor	warnings about	 warnings.*$	^brew doctor has 	Homebrew reports {s} setup warnings	-
+brew-doctor	.	-	-	Couldn't run brew doctor	-
+connections-view	.	-	-	The connection list only covers your own apps	The deeper scans cover system services.
+scan-failed	.	 stopped with.*$	-	{s} didn't finish	So some of its checks are missing from this report.
+scan-silent	.	 finished but.*$	-	{s} finished without recording anything	So its checks can't count as passed.
+scan-missing	.	 did not run.*$	-	{s} didn't run	So none of its checks are in this report.
+record-format	.	 result line.*$	-	{s} scan results couldn't be read	So those checks are missing from this report.
