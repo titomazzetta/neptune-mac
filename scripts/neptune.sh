@@ -143,6 +143,7 @@ nep_score_records() {
           v = title
           if (psx[i] != "-") sub(psx[i], "", v)
           if (ppx[i] != "-") sub(ppx[i], "", v)
+          gsub(/\\x20/, " ", v)     # lsof writes a space in a name as \x20
           HEAD = fill(ph[i], v)
           CTX = (pcx[i] == "-") ? "" : fill(pcx[i], v)
           # A leading + marks context that is a FACT about this finding
@@ -153,7 +154,11 @@ nep_score_records() {
           break
         }
       }
-      if (label != "" && sev != "pass" && sev != "info")
+      # An unknown is not "the vendor does this": Neptune could not see it, so
+      # the name is a likely owner, not an explanation.
+      if (label != "" && sev == "unknown")
+        CTX = "Probably " label "'"'"'s, but Neptune couldn'"'"'t look inside to confirm."
+      else if (label != "" && sev != "pass" && sev != "info")
         CTX = (keepctx && CTX != "" ? CTX " " : "") label " ships it this way" (sev == "attention" ? ". Likely one to keep." : ".")
       gsub(/\|/, "/", HEAD); gsub(/\|/, "/", CTX)
     }
@@ -721,6 +726,7 @@ fi
 # `sleep` outlives a kill of the loop by up to 50 s, and while it holds this
 # script's stdout, `neptune.sh`'s `| tee` waits for it (found in review).
 ( while true; do sudo -n true 2>/dev/null; sleep 50; done ) >/dev/null 2>&1 </dev/null & KA=$!
+disown "$KA" 2>/dev/null || true   # no "Terminated" notice when the trap stops it
 trap 'kill $KA 2>/dev/null; rm -rf "$TMP"' EXIT
 
 # Scans append records here. NEPTUNE_SUITE tells them they are running together,

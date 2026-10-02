@@ -55,6 +55,22 @@ explains each in full — symptom, root cause, fix, and what was learned.
   every python test file.
 
 ### Fixed
+- From the first real run of this release (1 Oct 2026, macOS 27.0.1):
+  - a stray `Terminated: 15` line at the end of every run on macOS (the sudo
+    keep-alive is now disowned; the exit trap still stops it);
+  - "New since your last snapshot: listener:Code\x20H:127.0.0.1:ephemeral" now
+    reads "Code H started listening for connections / Only this Mac can reach
+    it", and new apps, login items, helpers and extensions each get their own
+    sentence;
+  - a new app in /Applications or a new localhost-only listener since the
+    snapshot is now a small thing, not something to look at — new login items,
+    root helpers, extensions and network-reachable listeners still are;
+  - "5 things from your snapshot are gone" had the advice for a brand-new
+    snapshot; it now has its own check id (`baseline-gone`) and its own advice;
+  - "1 formulae and 2 casks" reads "1 formula and 2 casks";
+  - a vendor name on a check that could not run said "Google ships it this
+    way"; it now says "Probably Google's, but Neptune couldn't look inside to
+    confirm".
 - The sanitizer turned `127.0.0.1` into `0.0.0.0` — "only this Mac" into "your
   whole network" — and `/Users/Shared` into a user's home. Loopback, `0.0.0.0`
   and `/Users/Shared` are kept; private ranges keep their prefix.

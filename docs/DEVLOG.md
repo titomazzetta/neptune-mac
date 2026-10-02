@@ -1191,6 +1191,32 @@ report that inverts a finding is worse than an unsanitized one. Addresses now
 keep their meaning (loopback, any-address, private prefix) and lose their
 identity.
 
+## Bug 22 — the first real run of the new voice
+
+The redesign was tested against fixtures. The first run on the development Mac
+(1 Oct 2026) was the real test, and it found five things the fixtures could not:
+
+- **`Terminated: 15` after the summary.** macOS's bash 3.2 reports a
+  background job that a trap kills; Linux CI never showed it. The sudo
+  keep-alive is now `disown`ed — out of the job table, so nothing to report —
+  and the exit trap still stops it by PID.
+- **A snapshot entry is not a sentence.** `listener:Code\x20H:127.0.0.1:ephemeral`
+  is a good baseline key and an unreadable headline. The phrasebook now has a
+  row per kind of entry, decodes lsof's `\x20`, and strips the address with a
+  pattern that leaves a name like `1Password` alone.
+- **Calibration.** Installing Audacity cost 12 security points, the same as a
+  new root daemon. A new app in /Applications, or a listener only this Mac can
+  reach, is now a notice; persistence and network-reachable listeners stay
+  attention. "Calibrated over alarmist" is in the project's own rules, and a
+  scan that cries wolf at every install trains people to rebaseline without
+  looking.
+- **Advice for the wrong event.** "Things from your snapshot are gone" shared a
+  check id with "snapshot created" and borrowed its advice. One event, one id.
+- **A vendor name is not an explanation of an unknown.** "Google ships it this
+  way" under "Couldn't read what this launches" claims knowledge Neptune does
+  not have. Unknowns now say whose it probably is, and that it couldn't be
+  confirmed.
+
 ## Cross-cutting practices that came out of these
 
 - **CI as a regression net for exactly these bugs.** Linux runs shellcheck,

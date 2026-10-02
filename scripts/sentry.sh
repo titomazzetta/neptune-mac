@@ -121,6 +121,19 @@ listener_entries() {
     }' | sort -u
 }
 
+# new_item_is_quiet <snapshot entry> — 0 when something new since the baseline
+# is worth knowing but not worth an alarm: an app in /Applications (the user
+# almost always installed it), or a listener only this Mac can reach. New login
+# items, root helpers, system extensions and network-reachable listeners stay
+# attention: those are how software persists and how it is reached.
+new_item_is_quiet() {
+  case "$1" in
+    app:*) return 0 ;;
+    listener:*:127.*|listener:*:\[::1\]:*|listener:*:localhost:*) return 0 ;;
+  esac
+  return 1
+}
+
 # ---------------------------------------------------------------------------
 # Sourced by tests/unit.sh to exercise the pure functions above against
 # captured fixtures, without running a scan or touching the system. Nothing
@@ -145,6 +158,7 @@ sudo -v || exit 1
 # `sleep` outlives a kill of the loop by up to 50 s, and while it holds this
 # script's stdout, `neptune.sh`'s `| tee` waits for it (found in review).
 ( while true; do sudo -n true 2>/dev/null; sleep 50; done ) >/dev/null 2>&1 </dev/null & KA=$!
+disown "$KA" 2>/dev/null || true   # no "Terminated" notice when the trap stops it
 trap 'kill $KA 2>/dev/null' EXIT
 
 ############################################################
@@ -213,11 +227,15 @@ else
       pass "Nothing new since the baseline of $(stat -f '%Sm' -t '%Y-%m-%d' "$BASELINE") — no new persistence, helpers, extensions, apps or listeners"
     fi
     if [ -n "$GONE" ]; then
+      CHECK=baseline-gone
       info "$(printf '%s\n' "$GONE" | grep -c .) baseline item(s) are gone — software removed, or an app that is not running right now"
     fi
     if [ -n "$NEW" ]; then
       out "  ${RED}NEW since baseline:${RST}"
-      while IFS= read -r L; do flag "NEW since baseline: $L"; done <<EOF
+      CHECK=baseline-diff
+      while IFS= read -r L; do
+        if new_item_is_quiet "$L"; then warn "NEW since baseline: $L"; else flag "NEW since baseline: $L"; fi
+      done <<EOF
 $NEW
 EOF
     fi

@@ -444,6 +444,13 @@ REMEDIATION = [
      "Nothing to do, and it costs no points. From the next run on, anything that "
      "appears or disappears is reported against this snapshot.",
      _none),
+    (("baseline-gone",), r"baseline item\(s\) are gone",
+     "Things that were in the last known-good snapshot are no longer there: software "
+     "you removed, or an app whose listener only exists while it is running.",
+     "Nothing to do if you uninstalled something or closed an app. It costs no points. "
+     "Accept the new state once you recognize the list in the text report.",
+     lambda t: [("./sentry.sh --rebaseline", "neptune",
+                 "Records what is there now as the new known-good snapshot.")]),
     (("connections-view",), r"^Unprivileged view",
      "The per-app connection count in the network check ran without root, so it only "
      "saw your own processes. Root-owned daemons were not in its view.",
@@ -720,7 +727,8 @@ SHORT = {
     "process-root": "A program running with full admin rights isn't signed by its maker.",
     "listeners": "Some programs are waiting for connections from other machines.",
     "network-signing": "A program that's online isn't signed by its maker.",
-    "baseline-diff": "Login items or listeners changed since your last known-good snapshot.",
+    "baseline-diff": "Something appeared since your last known-good snapshot.",
+    "baseline-gone": "Some things from your last snapshot are no longer there.",
     "proxy": "Your web traffic is being routed through a proxy.",
     "net-extensions": "A network extension can see or filter your traffic.",
     "config-profiles": "A configuration profile is installed. Profiles can change settings and what the Mac trusts.",

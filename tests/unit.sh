@@ -157,6 +157,14 @@ t_section "sentry.sh — listener_entries() ephemeral-port collapse"
   sed 's|TCP \[::1\]:6985|TCP *:6985|' "$FIX/lsof-listeners.txt" > "$T/exposed.txt"
   t_is "loopback -> all-interfaces is still caught" "listener:WavesLoca:*:6985" \
      "$(comm -13 <(listener_entries < "$FIX/lsof-listeners.txt") <(listener_entries < "$T/exposed.txt"))"
+  Q=""
+  for E in 'app:Audacity 4.app' 'listener:Code\x20H:127.0.0.1:ephemeral' 'listener:launchd:[::1]:8021' \
+           'listener:evil_bd:*:ephemeral' 'listener:x:0.0.0.0:80' 'launchd:/Library/LaunchAgents/x.plist' \
+           'helper:com.x.helper' 'sysext:com.x.filter'; do
+    if new_item_is_quiet "$E"; then Q="${Q}q"; else Q="${Q}A"; fi
+  done
+  t_is "new apps and localhost listeners are notices; persistence and reachable listeners are attention" \
+     "qqqAAAAA" "$Q"
 )
 
 ############################################################
@@ -181,6 +189,8 @@ t_section "check_updates.sh — softwareupdate parser and timeout"
 (
   # shellcheck source=/dev/null
   NEPTUNE_LIB=1 . scripts/check_updates.sh >/dev/null 2>&1
+  t_is "brew counts read as words" "1 formula and 2 casks|3 formulae|1 cask" \
+     "$(brew_counts 1 2)|$(brew_counts 3 0)|$(brew_counts 0 1)"
   P=$(su_parse 26 < "$FIX/softwareupdate-2026-09-18.txt")
   t_is "minor updates are updates" "Safari 27.0|macOS Tahoe 26.7" \
      "$(printf '%s\n' "$P" | awk -F'\t' '$1=="update"{print $3}' | tr '\n' '|' | sed 's/|$//')"
