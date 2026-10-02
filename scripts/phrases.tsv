@@ -56,7 +56,14 @@ listeners	.	-	^.*binary:.*/	{s} accepts connections without a developer signatur
 network-signing	cannot be found	-	-	A program on the network has no file on disk	+Its file was deleted or hidden while it runs.
 network-signing	^Ad-hoc	\)$	^.*/	{s} is online with an anonymous signature	-
 network-signing	.	\)$	^.*/	{s} is online without a developer signature	-
+baseline-diff	^NEW since baseline: app:	\.app$	^NEW since baseline: app:	{s} is new since your last snapshot	A new app. If you installed it, ./sentry.sh --rebaseline accepts it.
+baseline-diff	^NEW since baseline: listener:.*:(127\.|\[::1\]|localhost)	:(\[[0-9a-fA-F:.]*\]|[0-9.]+|\*|localhost):[0-9a-z]+$	^NEW since baseline: listener:	{s} started listening for connections	Only this Mac can reach it. If you know the app, ./sentry.sh --rebaseline accepts it.
+baseline-diff	^NEW since baseline: listener:	:(\[[0-9a-fA-F:.]*\]|[0-9.]+|\*|localhost):[0-9a-z]+$	^NEW since baseline: listener:	{s} started listening for connections	Reachable from your network. Identify it before accepting it.
+baseline-diff	^NEW since baseline: launchd:	-	^NEW since baseline: launchd:.*/	New login item: {s}	Something new starts automatically. Identify it before accepting it.
+baseline-diff	^NEW since baseline: helper:	-	^NEW since baseline: helper:	New helper with full system access: {s}	Identify it before accepting it.
+baseline-diff	^NEW since baseline: sysext:	-	^NEW since baseline: sysext:	New system extension: {s}	Identify it before accepting it.
 baseline-diff	^NEW	-	^NEW since baseline: 	New since your last snapshot: {s}	If you installed it, accept it with ./sentry.sh --rebaseline.
+baseline-gone	gone	 baseline item.*$	-	{s} things from your snapshot are gone	Removed software, or apps that aren't running right now.
 baseline-diff	gone	 baseline item.*$	-	{s} things from your snapshot are gone	Removed software, or apps that aren't running right now.
 baseline-diff	^Baseline	-	-	Took a fresh snapshot to compare against next time	-
 proxy	.	-	-	A system proxy is routing your web traffic	Fine for work or VPN setups. Otherwise, find out who set it.
@@ -85,6 +92,7 @@ kexts	.	-	-	Third-party kernel extensions are loaded	Apple has deprecated them. 
 macos-updates	pending	-	^Apple software updates are pending \([0-9]+\): 	Ready to install: {s}	-
 macos-updates	.	-	-	Couldn't check for Apple updates	-
 macos-upgrade	.	 — .*$	^.*available: 	{s} is available	Upgrade when the apps you rely on support it.
+brew-outdated	^Homebrew has updates for	-	^Homebrew has updates for 	Homebrew has updates for {s}	-
 brew-outdated	have updates	 have updates available$	Homebrew 	{s} have Homebrew updates	-
 brew-outdated	.	-	-	Couldn't refresh Homebrew's package list	-
 app-updates	.	-	^.*catalog: 	Behind on updates: {s}	They update themselves; open each one, or let Homebrew adopt it.

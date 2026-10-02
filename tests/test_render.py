@@ -367,6 +367,7 @@ def phrase_py(rows, check, title):
             v = re.sub(suffix, "", v, count=1)
         if prefix != "-":
             v = re.sub(prefix, "", v, count=1)
+        v = v.replace("\\x20", " ")
         return head.replace("{s}", v)
     return title
 
@@ -394,6 +395,32 @@ class Phrasebook(unittest.TestCase):
             words = re.sub(r"\{s\}", "", r[4]).split()
             self.assertFalse([w for w in words if len(w) > 3 and w.isupper() and w.isalpha()
                               and w not in ("FileVault", "NAT", "DNS", "WAN", "ISP")], r[4])
+
+    def test_new_since_baseline_reads_by_kind(self):
+        """The 1 Oct 2026 run on the development Mac printed
+        "New since your last snapshot: listener:Code\\x20H:127.0.0.1:ephemeral"."""
+        out = tempfile.mkdtemp()
+        try:
+            fx = os.path.join(out, "f.txt")
+            with open(fx, "w", encoding="utf-8") as fh:
+                fh.write("notice|security|sentry|baseline-diff|NEW since baseline: app:Audacity 4.app\n"
+                         "notice|security|sentry|baseline-diff|NEW since baseline: listener:Code\\x20H:127.0.0.1:ephemeral\n"
+                         "attention|security|sentry|baseline-diff|NEW since baseline: listener:1Password:*:7000\n"
+                         "attention|security|sentry|baseline-diff|NEW since baseline: launchd:/Library/LaunchAgents/com.x.agent.plist\n"
+                         "notice|maintenance|updates|brew-outdated|Homebrew has updates for 1 formula and 2 casks\n")
+            run(["bash", "scripts/neptune.sh", "--replay", fx, "--json", "--out", out], env={"HOME": out})
+            with open(os.path.join(out, "neptune_findings_replay.json"), encoding="utf-8") as fh:
+                found = json.load(fh)["findings"]
+        finally:
+            shutil.rmtree(out, ignore_errors=True)
+        for want in ("Audacity 4 is new since your last snapshot",
+                     "Code H started listening for connections",
+                     "1Password started listening for connections",
+                     "New login item: com.x.agent.plist",
+                     "Homebrew has updates for 1 formula and 2 casks"):
+            self.assertIn(want, [f["headline"] for f in found])
+        for f in found:
+            self.assertEqual(f["headline"], phrase_py(self.rows, f["check"], f["title"]))
 
     def test_awk_and_python_read_every_fixture_the_same(self):
         for fixture in (FIXTURE_V2,):

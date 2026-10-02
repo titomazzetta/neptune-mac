@@ -162,6 +162,7 @@ sudo -v || exit 1
 # `sleep` outlives a kill of the loop by up to 50 s, and while it holds this
 # script's stdout, `neptune.sh`'s `| tee` waits for it (found in review).
 ( while true; do sudo -n true 2>/dev/null; sleep 50; done ) >/dev/null 2>&1 </dev/null & KA=$!
+disown "$KA" 2>/dev/null || true   # no "Terminated" notice when the trap stops it
 trap 'kill $KA 2>/dev/null' EXIT
 
 # Binaries already flagged, one per line, so the same unverified binary is not
