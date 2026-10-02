@@ -11,7 +11,36 @@ explains each in full — symptom, root cause, fix, and what was learned.
 
 ## [Unreleased]
 
+### Changed — how Neptune reads
+- **Plain words everywhere.** `scripts/phrases.tsv` turns each recorded title
+  into a headline and a one-line context ("The firewall is off" / "A common
+  default. Worth turning on if this Mac joins public Wi-Fi."). Titles, check
+  ids and acknowledge keys are untouched, so rewording never un-keeps anything.
+  A test reads the table with Python's regex engine too and requires the same
+  headline as awk for every fixture finding.
+- **The terminal** shows one progress line per scan, then a one-screen summary:
+  verdict, counts, four scores, the numbered list in plain words, and the next
+  step. `--verbose` streams everything as before. Colour only on a terminal;
+  `NO_COLOR` respected; ASCII fallback outside UTF-8.
+- **The HTML report** is rebuilt around a first view (verdict, synopsis, scores,
+  counts), then *Protection at a glance*, *Do these next* (ranked by score
+  gain, with the queue command filled in), *Recommended commands* for this Mac,
+  and each finding on an explanation ladder — Simple / Detailed / Technical,
+  switched with CSS only — down to what every part of every command does and
+  how to undo it. Passed checks, kept items and scoring are collapsed. Still no
+  JavaScript and no network requests.
+- Categories read as **Security, Network, Tidiness, Updates** (ids unchanged).
+
 ### Added
+- **`--fix --only 9,2,12`** — a queue: those items, in that order. An unknown
+  number stops it before anything runs.
+- **k keep / u uninstall / skip** in `--fix` for software you may have chosen,
+  and keep for a double NAT you have confirmed is passthrough.
+- **AI brief** (`neptune_ai_brief_<date>.md`) on every run with python3: the
+  findings plus a prompt, always sanitized. HTML, JSON and the brief are now
+  automatic; `--no-html` skips them.
+- CI writes the macOS run's verdict and scores to the job summary, and keeps the
+  sanitized brief with the uploaded report.
 - **Branch protection as code:** `.github/rulesets/main.json` — no direct or
   force pushes to `main`, all three CI jobs required. `tests/test_repo.py` fails
   if a CI job is renamed without updating the rule.
@@ -24,6 +53,29 @@ explains each in full — symptom, root cause, fix, and what was learned.
 - `tests/test_repo.py`: ruleset ↔ CI job names, SHA pins, read-only default
   tokens, and every relative link in the docs resolves. `tests/lint.sh` now runs
   every python test file.
+
+### Fixed
+- From the first real run of this release (1 Oct 2026, macOS 27.0.1):
+  - a stray `Terminated: 15` line at the end of every run on macOS (the sudo
+    keep-alive is now disowned; the exit trap still stops it);
+  - "New since your last snapshot: listener:Code\x20H:127.0.0.1:ephemeral" now
+    reads "Code H started listening for connections / Only this Mac can reach
+    it", and new apps, login items, helpers and extensions each get their own
+    sentence;
+  - a new app in /Applications or a new localhost-only listener since the
+    snapshot is now a small thing, not something to look at — new login items,
+    root helpers, extensions and network-reachable listeners still are;
+  - "5 things from your snapshot are gone" had the advice for a brand-new
+    snapshot; it now has its own check id (`baseline-gone`) and its own advice;
+  - "1 formulae and 2 casks" reads "1 formula and 2 casks";
+  - a vendor name on a check that could not run said "Google ships it this
+    way"; it now says "Probably Google's, but Neptune couldn't look inside to
+    confirm".
+- The sanitizer turned `127.0.0.1` into `0.0.0.0` — "only this Mac" into "your
+  whole network" — and `/Users/Shared` into a user's home. Loopback, `0.0.0.0`
+  and `/Users/Shared` are kept; private ranges keep their prefix.
+- A known vendor's name no longer hides a fact about the finding: "Only this
+  Mac can reach it" stays beside "Waves ships it this way".
 
 ## [1.1.0] — 2026-09-30
 

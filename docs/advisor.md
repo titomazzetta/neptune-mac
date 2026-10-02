@@ -6,10 +6,25 @@ report, an advisor reads it, and **you** run any actions. The advisor never gets
 to run destructive commands.
 
 ## The loop
-1. Run `./neptune.sh` (or any single scan).
-2. Open the report from your Desktop (or copy the terminal output).
-3. Paste it to an LLM with the prompt below.
-4. Read the recommendations, then run only what you approve, yourself.
+1. Run `./neptune.sh`.
+2. Open `neptune_ai_brief_<date>.md` from your Desktop. It is the findings with
+   the prompt already on top, sanitized (see SECURITY.md, "The AI brief").
+   Read it — it's plain text — then paste the whole file into a model.
+3. Ask follow-ups about anything you don't recognize.
+4. Act through Neptune's own commands (`--fix --only N`, `uninstall.sh … --dry-run`),
+   which show you everything before they change anything.
+
+The brief's prompt lives in `scripts/neptune_render.py` (`BRIEF_PROMPT`). The
+template below is the older, longer version for pasting a text report by hand.
+
+## When it is worth it
+
+The HTML report's *Get a second opinion* section says when, for that run:
+background items Neptune can't vouch for (unsigned, unknown vendor), checks
+that couldn't finish, and old or unused software where the question is "does
+this update matter for security?". Those are the cases where identifying a
+binary by its name and path — something a model does well — changes what you
+do.
 
 ## Prompt template
 

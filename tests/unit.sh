@@ -157,6 +157,14 @@ t_section "sentry.sh — listener_entries() ephemeral-port collapse"
   sed 's|TCP \[::1\]:6985|TCP *:6985|' "$FIX/lsof-listeners.txt" > "$T/exposed.txt"
   t_is "loopback -> all-interfaces is still caught" "listener:WavesLoca:*:6985" \
      "$(comm -13 <(listener_entries < "$FIX/lsof-listeners.txt") <(listener_entries < "$T/exposed.txt"))"
+  Q=""
+  for E in 'app:Audacity 4.app' 'listener:Code\x20H:127.0.0.1:ephemeral' 'listener:launchd:[::1]:8021' \
+           'listener:evil_bd:*:ephemeral' 'listener:x:0.0.0.0:80' 'launchd:/Library/LaunchAgents/x.plist' \
+           'helper:com.x.helper' 'sysext:com.x.filter'; do
+    if new_item_is_quiet "$E"; then Q="${Q}q"; else Q="${Q}A"; fi
+  done
+  t_is "new apps and localhost listeners are notices; persistence and reachable listeners are attention" \
+     "qqqAAAAA" "$Q"
 )
 
 ############################################################
@@ -181,6 +189,8 @@ t_section "check_updates.sh — softwareupdate parser and timeout"
 (
   # shellcheck source=/dev/null
   NEPTUNE_LIB=1 . scripts/check_updates.sh >/dev/null 2>&1
+  t_is "brew counts read as words" "1 formula and 2 casks|3 formulae|1 cask" \
+     "$(brew_counts 1 2)|$(brew_counts 3 0)|$(brew_counts 0 1)"
   P=$(su_parse 26 < "$FIX/softwareupdate-2026-09-18.txt")
   t_is "minor updates are updates" "Safari 27.0|macOS Tahoe 26.7" \
      "$(printf '%s\n' "$P" | awk -F'\t' '$1=="update"{print $3}' | tr '\n' '|' | sed 's/|$//')"
@@ -258,8 +268,12 @@ t_section "fix.sh — the guided fixer"
   t_is "one upgrade run covers macOS, brew and App Store findings" "upgrade upgrade upgrade" "$A1 $A2 $ACTION"
   plan_for persistence-launchd "UNSIGNED persistence: a runs /Applications/SoundID Reference.app/Contents/MacOS/x (/p.plist)"
   t_is "an unsigned app's finding offers its uninstall, name kept whole" "uninstall:SoundID Reference" "$ACTION"
+  t_is "software you might have chosen can be kept instead" "1" "$KEEP"
   plan_for double-nat x
   t_is "no invented fix where there is none (double NAT is a router setting)" "guide" "$KIND"
+  t_is "a confirmed-fine double NAT can be kept" "1" "$KEEP"
+  plan_for firewall x
+  t_is "a plain setting is not offered as keep" "0" "$KEEP"
   t_is "run_words: a ; is data, not a command separator" "a;b" "$(run_words 'printf %s a;b')"
   t_is "run_words: no globbing" "*" "$(cd "$T" && run_words 'printf %s *')"
 )
@@ -272,6 +286,14 @@ cp "$LISTING" "$FH/.neptune/last-listing.tsv"
 PLANOUT=$(HOME="$FH" ./scripts/fix.sh --plan)
 t_is "--plan covers every numbered item" "$(grep -vc '^#' "$LISTING")" "$(printf '%s\n' "$PLANOUT" | grep -vc '^#')"
 t_is "--plan changes nothing and writes no log" "no" "$([ -e "$FH/.neptune/fix-log.tsv" ] && echo yes || echo no)"
+t_is "--only is a queue: those items, in that order, once each" "3 1 12" \
+   "$(HOME="$FH" ./scripts/fix.sh --plan --only 3,1,3,12 | grep -v '^#' | cut -f1 | tr '\n' ' ' | sed 's/ $//')"
+HOME="$FH" ./scripts/fix.sh --plan --only 2,99 >/dev/null 2>&1
+t_is "--only with a number that is not in the list: exit 64, nothing runs" "64" "$?"
+HOME="$FH" ./scripts/fix.sh --only 1x >/dev/null 2>&1
+t_is "--only with something that is not a number: exit 64" "64" "$?"
+t_is "the listing carries plain words for the fixer" "8" \
+   "$(grep -v '^#' "$LISTING" | head -1 | awk -F'\t' '{print NF}')"
 mkdir -p "$T/nofix"
 HOME="$T/nofix" ./scripts/fix.sh --plan >/dev/null 2>&1
 t_is "no saved run yet: exit 64" "64" "$?"

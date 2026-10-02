@@ -155,9 +155,17 @@ class Sanitizer(unittest.TestCase):
         text = ("Titos-Mac-Studio.local /Users/tito/x /Users/other/y 192.168.1.20 "
                 "3c:7c:3f:1a:2b:cc 8:0:27:a:b:c Titos-Mac-Studio")
         out = clean(text)
-        for leaked in ("Titos", "tito", "other", "192.168", "3c:7c", "8:0:27"):
+        # The private-range prefix stays (every home network has it); the host part goes.
+        for leaked in ("Titos", "tito", "other", "1.20", "3c:7c", "8:0:27"):
             self.assertNotIn(leaked, out)
         self.assertIn("/Users/exampleuser/x", out)
+
+    def test_keeps_what_an_address_means(self):
+        clean = R.make_sanitizer(True, "", "")
+        self.assertEqual(clean("127.0.0.1:6985 and 0.0.0.0:5000"), "127.0.0.1:6985 and 0.0.0.0:5000")
+        self.assertEqual(clean("router 192.168.1.254 then 10.0.0.1 then 8.8.4.4"),
+                         "router 192.168.x.x then 10.x.x.x then x.x.x.x")
+        self.assertEqual(clean("/Users/Shared/x /Users/tito/y"), "/Users/Shared/x /Users/exampleuser/y")
 
     def test_disabled_is_identity(self):
         self.assertEqual(R.make_sanitizer(False, "h", "u")("h u 10.0.0.1"), "h u 10.0.0.1")
@@ -218,7 +226,50 @@ class ReplayEndToEnd(unittest.TestCase):
         self.assertEqual(ns, list(range(1, len(ns) + 1)))
         for f in self.report["findings"]:
             if "n" in f:
-                self.assertIn("%2d. [%s] %s" % (f["n"], f["category"], f["title"]), self.proc.stdout)
+                self.assertIn("%3d  %s" % (f["n"], f["headline"]), self.proc.stdout)
+
+    def test_every_finding_has_plain_words(self):
+        for f in self.report["findings"]:
+            self.assertTrue(f["headline"], f["title"])
+            if f["severity"] != "info":
+                self.assertNotEqual(f["headline"], f["title"],
+                                    "no phrasebook row turned this into plain words: " + f["title"])
+
+    def test_render_only_keys_never_reach_the_json(self):
+        self.assertFalse([k for k in self.report if k.startswith("_")])
+        for f in self.report["findings"]:
+            self.assertFalse([k for k in f if k.startswith("_")], f["title"])
+
+    def test_python_scores_match_the_awk_scores(self):
+        """simulate_scores re-implements nep_compute_scores so the report can
+        say what a fix is worth. This is what keeps the two from drifting."""
+        recs = [{"severity": f["severity"], "category": f["category"],
+                 "acknowledged": f.get("acknowledged", False)}
+                for f in self.report["findings"] + self.report["checks_passed"]]
+        self.assertEqual(R.simulate_scores(recs), self.report["scores"])
+
+    def test_html_has_the_reading_levels_and_the_queue(self):
+        for needle in ('id="lv1"', 'id="lv2"', 'id="lv3"', "Do these next",
+                       "Recommended commands", "Get a second opinion",
+                       "./neptune.sh --fix --only ", "neptune_ai_brief_replay.md"):
+            self.assertIn(needle, self.html, needle)
+
+    def test_the_queue_is_the_do_these_next_order(self):
+        m = re.search(r"Queue them, in this order:.*?--only ([0-9,]+)", self.html, re.S)
+        self.assertTrue(m)
+        queue = [int(n) for n in m.group(1).split(",")]
+        self.assertEqual(len(queue), len(set(queue)), "an item is queued twice")
+        numbered = {f["n"] for f in self.report["findings"] if "n" in f}
+        self.assertTrue(set(queue) <= numbered)
+
+    def test_brief_is_written_sanitized_with_its_prompt(self):
+        with open(os.path.join(self.out, "neptune_ai_brief_replay.md"), encoding="utf-8") as fh:
+            brief = fh.read()
+        self.assertIn("do not give me shell i can't look up", brief.lower())
+        self.assertIn("Sanitized", brief)
+        for f in self.report["findings"]:
+            if "n" in f:
+                self.assertIn("### #%d " % f["n"], brief)
 
     def test_html_makes_no_network_requests_and_runs_no_script(self):
         low = self.html.lower()
@@ -285,11 +336,159 @@ class ReplayEndToEnd(unittest.TestCase):
         out = os.path.join(self.tmp, "san")
         run(["bash", "scripts/neptune.sh", "--replay", fixture, "--json", "--html",
              "--sanitize", "--out", out], env={"HOME": self.home})
-        for name in ("neptune_findings_replay.json", "neptune_report_replay.html"):
+        for name in ("neptune_findings_replay.json", "neptune_report_replay.html",
+                     "neptune_ai_brief_replay.md"):
             with open(os.path.join(out, name), encoding="utf-8") as fh:
                 body = fh.read()
             for leaked in ("192.168.1.1", "10.0.0.1", "somebody"):
                 self.assertNotIn(leaked, body, name)
+
+
+def load_phrases():
+    rows = []
+    with open(os.path.join(SCRIPTS, "phrases.tsv"), encoding="utf-8") as fh:
+        for line in fh:
+            line = line.rstrip("\n")
+            if not line or line.startswith("#") or not line.strip():
+                continue
+            rows.append(line.split("\t"))
+    return rows
+
+
+def phrase_py(rows, check, title):
+    """A second reading of phrases.tsv, in Python's regex engine. If a row
+    only works because of something BWK awk does differently, the two
+    readings disagree and the test below says which title."""
+    for c, match, suffix, prefix, head, _ctx in rows:
+        if c != check or (match != "-" and not re.search(match, title)):
+            continue
+        v = title
+        if suffix != "-":
+            v = re.sub(suffix, "", v, count=1)
+        if prefix != "-":
+            v = re.sub(prefix, "", v, count=1)
+        v = v.replace("\\x20", " ")
+        return head.replace("{s}", v)
+    return title
+
+
+class Phrasebook(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        cls.rows = load_phrases()
+
+    def test_rows_have_six_columns_and_compile(self):
+        for r in self.rows:
+            self.assertEqual(len(r), 6, r)
+            for rx in r[1:4]:
+                if rx != "-":
+                    re.compile(rx)
+
+    def test_every_check_id_has_a_row(self):
+        have = {r[0] for r in self.rows}
+        missing = sorted(check_ids_in_scans() - have - {"connections-view"})
+        self.assertEqual(missing, [], "check ids with no plain-words row")
+
+    def test_no_shouting_in_headlines(self):
+        for r in self.rows:
+            words = re.sub(r"\{s\}", "", r[4]).split()
+            self.assertFalse([w for w in words if len(w) > 3 and w.isupper() and w.isalpha()
+                              and w not in ("FileVault", "NAT", "DNS", "WAN", "ISP")], r[4])
+
+    def test_new_since_baseline_reads_by_kind(self):
+        """The 1 Oct 2026 run on the development Mac printed
+        "New since your last snapshot: listener:Code\\x20H:127.0.0.1:ephemeral"."""
+        out = tempfile.mkdtemp()
+        try:
+            fx = os.path.join(out, "f.txt")
+            with open(fx, "w", encoding="utf-8") as fh:
+                fh.write("notice|security|sentry|baseline-diff|NEW since baseline: app:Audacity 4.app\n"
+                         "notice|security|sentry|baseline-diff|NEW since baseline: listener:Code\\x20H:127.0.0.1:ephemeral\n"
+                         "attention|security|sentry|baseline-diff|NEW since baseline: listener:1Password:*:7000\n"
+                         "attention|security|sentry|baseline-diff|NEW since baseline: launchd:/Library/LaunchAgents/com.x.agent.plist\n"
+                         "notice|maintenance|updates|brew-outdated|Homebrew has updates for 1 formula and 2 casks\n")
+            run(["bash", "scripts/neptune.sh", "--replay", fx, "--json", "--out", out], env={"HOME": out})
+            with open(os.path.join(out, "neptune_findings_replay.json"), encoding="utf-8") as fh:
+                found = json.load(fh)["findings"]
+        finally:
+            shutil.rmtree(out, ignore_errors=True)
+        for want in ("Audacity 4 is new since your last snapshot",
+                     "Code H started listening for connections",
+                     "1Password started listening for connections",
+                     "New login item: com.x.agent.plist",
+                     "Homebrew has updates for 1 formula and 2 casks"):
+            self.assertIn(want, [f["headline"] for f in found])
+        for f in found:
+            self.assertEqual(f["headline"], phrase_py(self.rows, f["check"], f["title"]))
+
+    def test_awk_and_python_read_every_fixture_the_same(self):
+        for fixture in (FIXTURE_V2,):
+            out = tempfile.mkdtemp()
+            try:
+                run(["bash", "scripts/neptune.sh", "--replay", fixture, "--json", "--out", out],
+                    env={"HOME": out})
+                with open(os.path.join(out, "neptune_findings_replay.json"), encoding="utf-8") as fh:
+                    rep = json.load(fh)
+            finally:
+                shutil.rmtree(out, ignore_errors=True)
+            for f in rep["findings"]:
+                self.assertEqual(f["headline"], phrase_py(self.rows, f["check"], f["title"]), f["title"])
+
+
+class Ladder(unittest.TestCase):
+    """The explanation ladder: every rung exists for every check, and every
+    command the report can show has every part of it explained."""
+
+    def test_every_check_has_an_in_short(self):
+        for c in check_ids_in_scans():
+            means = R.advise(c, "x", "attention").get("means", "")
+            self.assertTrue(R.short_for(c, "attention", means), c)
+
+    def test_no_orphan_short_or_undo(self):
+        ids = check_ids_in_scans()
+        self.assertEqual(sorted(set(R.SHORT) - ids), [])
+        self.assertEqual(sorted(set(R.UNDO) - ids), [])
+
+    def test_an_unknown_is_never_explained_as_a_failure(self):
+        self.assertEqual(R.short_for("firewall", "unknown", ""), R.UNKNOWN_SHORT)
+
+    def test_every_shown_command_is_explained_part_by_part(self):
+        sample = ("UNSIGNED persistence: com.example.thing runs /Applications/Some App.app/Contents/"
+                  "MacOS/x (/Library/LaunchDaemons/com.example.thing.plist)")
+        commands = [c for entry in R.REMEDIATION for c, _k, _e in entry[4](sample)]
+        findings = [{"check": c, "severity": "attention", "acknowledged": False, "n": i + 1,
+                     "title": sample, "headline": "h"} for i, c in enumerate(sorted(check_ids_in_scans()))]
+        commands += [p["command"] for p in R.playbook({"findings": findings})]
+        commands += ["./neptune.sh --fix --only 3,1,2", "./neptune.sh --acknowledge 4"]
+        self.assertGreater(len(commands), 40)
+        for c in commands:
+            self.assertTrue(R.explain_command(c), "no part-by-part explanation for: " + c)
+
+    def test_playbook_commands_are_single_commands(self):
+        findings = [{"check": c, "severity": "attention", "acknowledged": False, "n": 1,
+                     "title": "/Applications/A.app", "headline": "h"} for c in check_ids_in_scans()]
+        for p in R.playbook({"findings": findings}):
+            for ch in ("|", ";", "&&", ">", chr(96), "$" + "("):
+                self.assertNotIn(ch, p["command"])
+            self.assertIn(p["kind"], R.KINDS)
+
+    def test_a_vendor_is_one_next_step(self):
+        recs, findings = [], []
+        for i, (n, ven) in enumerate(((1, "Waves"), (2, "Waves"), (3, None))):
+            recs.append({"severity": "attention", "category": "security", "acknowledged": False})
+            f = {"n": n, "severity": "attention", "category": "security", "acknowledged": False,
+                 "check": "persistence-launchd", "headline": "h%d" % n, "_i": i}
+            if ven:
+                f["vendor"] = {"name": ven}
+            findings.append(f)
+        steps = R.next_steps(recs, findings)
+        self.assertEqual(sorted(len(s["numbers"]) for s in steps), [1, 2])
+        waves = [s for s in steps if len(s["numbers"]) == 2][0]
+        # The marginal worth: three items cost 12+4+4; with Waves' two gone the
+        # third costs 12, so keeping Waves is worth 8 — not the 16 a sum of
+        # "first item" prices would claim.
+        self.assertEqual(waves["gains"], [("Security", 8)])
 
 
 class JsonToRecords(unittest.TestCase):

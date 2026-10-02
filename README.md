@@ -41,31 +41,43 @@ home.
 ```
 $ ./neptune.sh --replay tests/fixtures/findings-2026-09-18.txt     # a real run, replayed
 
-NEEDS ATTENTION
+  ● Several things need you.
+    11 to look at · 4 small · 0 couldn't check · 15 passed
 
-  security      52/100  [#####.....]
-  network       80/100  [########..]
-  bloat        100/100  [##########]
-  maintenance   95/100  [#########.]
+    Security   52  ▰▰▰▰▰▱▱▱▱▱     Network    80  ▰▰▰▰▰▰▰▰▱▱
+    Tidiness  100  ▰▰▰▰▰▰▰▰▰▰     Updates    95  ▰▰▰▰▰▰▰▰▰▱
 
-  15 checks passed · 11 attention · 4 minor · 0 could not run · 0 acknowledged · 2 informational
+  Look at these
+     2  Your ISP's box shows up as a second router
+        Often just IP passthrough. Your router's WAN address settles it.
+     3  SoundID Reference starts at login without a developer signature
+        Sonarworks ships it this way. Likely one to keep.
+     9  WavesLocalServer accepts connections without a developer signature
+        Only this Mac can reach it. Waves ships it this way. Likely one to keep.
+  Small things
+    13  The firewall is off
+        A common default. Worth turning on if this Mac joins public Wi-Fi.
+    14  11 formulae have Homebrew updates
 
-  NEEDS ATTENTION
-    5. [security] UNSIGNED persistence: com.docker.socket runs /Library/PrivilegedHelperTools/com.docker.socket (/Library/LaunchDaemons/com.docker.socket.plist)
-       known Docker pattern — see the HTML report for what it is
-   11. [network] SECOND PRIVATE ROUTER in path: 10.0.0.1 (beyond your gateway 192.168.1.1)
-  MINOR
-   13. [security] Application firewall is OFF — a common default, but worth enabling on any machine that joins public Wi-Fi
-   14. [maintenance] 11 Homebrew formulae have updates available
+  Next   ./neptune.sh --fix                  go through these one at a time
+         ./neptune.sh --fix --only <n,n>     just the ones you pick, in that order
+         ./neptune.sh --acknowledge <n>      keep something you recognize
 ```
+<sub>(trimmed — the full list has 15 items)</sub>
 
-A verdict first, then four scores, then one numbered list of what to do. Add
-`--html` for a report that **proves what it covered**: a posture panel showing
-each security control as checked-and-passed, failed, or could-not-check; every
-finding with what it means in plain English, what to do, and the exact command
-labelled `reads only` / `changes a setting` / `installs or removes software`;
-and every check that passed. The page has no JavaScript and makes no network
-requests when opened — CI asserts both.
+A verdict, four scores, then one numbered list in plain words, with the next
+step. Every run also writes, when python3 is available:
+
+- **an HTML report** that opens with the verdict, a two-line synopsis and the
+  scores, then *Protection at a glance* (each control checked, not assumed),
+  *Do these next* ranked by what each is worth, the handful of *Recommended
+  commands* that apply to this Mac, and every finding explained on a ladder —
+  **Simple / Detailed / Technical** — down to what each part of each command
+  does and how to undo it. No JavaScript, no network requests when opened; CI
+  asserts both.
+- **an AI brief** — the findings plus a ready prompt, already sanitized — for
+  when something looks unfamiliar and you want a second opinion.
+- **the JSON**, for tools, and a plain-text report with every scan's full output.
 
 ## Why you can trust the answer
 
@@ -129,16 +141,17 @@ privileges itself only where it needs them.
 1. **Scan.** Read-only; takes a few minutes, mostly waiting on `softwareupdate`
    and `brew update`.
    ```bash
-   ./neptune.sh --html
+   ./neptune.sh
    ```
+   One line per scan while it runs (`--verbose` streams everything).
 2. **Read.** The terminal ends with a verdict, four scores and one numbered list.
-   The HTML report (on your Desktop; `--out DIR` to change) opens with the
-   security posture panel, then every finding with what it means, what to do
-   and the exact command — plus every check that passed.
+   The HTML report lands on your Desktop (`--out DIR` to change): start at the
+   top, and switch to *Detailed* or *Technical* when you want the why and how.
 3. **Fix.** Walk the list one item at a time; nothing changes without a `y`.
-   Vendor helpers you recognize can be acknowledged from here too.
+   Software you recognize gets *k keep / u uninstall / skip* instead.
    ```bash
-   ./neptune.sh --fix
+   ./neptune.sh --fix                 # everything, in list order
+   ./neptune.sh --fix --only 13,2,9   # a queue: just these, in this order
    ```
 4. **Re-measure.** Accept the re-scan offered at the end. The HTML report shows
    each score's change since the last run — the proof that the fixes worked.
@@ -150,17 +163,25 @@ Exit codes make it scriptable: `0` healthy · `1` needs attention ·
 ## Fixing what it found
 
 ```bash
-./neptune.sh --fix          # walk the last run's list: fix, command, y/N — per item
-./fix.sh --plan             # what would be offered for each item; changes nothing
+./neptune.sh --fix               # walk the last run's list: fix, command, y/N — per item
+./neptune.sh --fix --only 13,2   # queue just those items, in that order
+./fix.sh --plan                  # what would be offered for each item; changes nothing
 ```
+
+The HTML report's *Do these next* list ends with the queue command already
+filled in, and every finding shows its number, so building your own queue is
+editing a list of numbers.
 
 For each numbered finding, `--fix` shows what the fix is, the exact command, and
 what kind of change it is — *changes a setting*, *installs or removes software*,
 *Neptune command* — then waits for a `y`. It turns on the firewall, disables the
 Guest account, installs pending updates, clears Homebrew's cache, hands
-cache-clearing and app removal to the confirmed tools below, offers to
-acknowledge a vendor helper you recognize, or opens the right System Settings
-pane. Where there is no honest one-command fix — double NAT is a router setting,
+cache-clearing and app removal to the confirmed tools below, or opens the right
+System Settings pane. For software you might have chosen — an unsigned audio
+helper, a licence daemon, Docker's root helper — it asks **k** keep (listed,
+no longer costing points), **u** uninstall (through `uninstall.sh`, which shows
+every file first), or skip; a double NAT you have confirmed is passthrough can
+be kept the same way. Where there is no honest one-command fix — double NAT is a router setting,
 FileVault needs you to store a recovery key — it says what to do instead of
 inventing a command. It deletes nothing itself, logs every change it applies to
 `~/.neptune/fix-log.tsv`, and ends by offering to re-scan.
@@ -222,11 +243,14 @@ you. Acknowledged findings stay listed and counted; they only stop deducting.
 last seen, so the next report shows what moved and what you fixed. Local plain
 text in `~/.neptune`; delete it to forget.
 
-**A second opinion.** `./neptune.sh --json --sanitize` exports the findings
-with hostname, user, paths, IPs and MACs replaced, ready to hand to a colleague
-or a model — [`docs/advisor.md`](docs/advisor.md) has the prompt that keeps a
-model from inventing `sudo` one-liners. `--replay <file>` re-renders any saved
-result without scanning.
+**A second opinion.** Every run writes `neptune_ai_brief_<date>.md` next to the
+report: the findings with a prompt on top, with your computer name, username,
+home folder and network addresses replaced (private ranges keep their prefix
+and `127.0.0.1` stays, because *only this Mac* versus *your whole network* is
+the finding). Paste it into a model when a background process or an old app
+looks unfamiliar. The prompt asks for Neptune's own commands rather than
+invented `sudo` one-liners — [`docs/advisor.md`](docs/advisor.md) explains why.
+`--replay <file>` re-renders any saved result without scanning.
 
 **Reading the results.** A flag is a lead, not a verdict. [`docs/reading-reports.md`](docs/reading-reports.md)
 covers telling a real finding from a vendor habit.
@@ -258,7 +282,7 @@ how a security tool starts lying to you.
 |---|---|
 | `Could not obtain administrator privileges` (exit 77) | The password prompt was declined, or this account is not an administrator. Nothing was scanned. |
 | **COULD NOT BE CHECKED** items, exit 2 | A check could not run — no network for update checks, an unreadable file, a command that gave no answer. Neptune reports that as unknown, never as a pass. The finding says which check and why. |
-| `--html, --json and --replay need python3` | Install the Command Line Tools: `xcode-select --install`. The plain scan works without them, and Neptune never launches the macOS "install developer tools" dialog on its own. |
+| No HTML report or AI brief, or `--replay needs python3` | Install the Command Line Tools: `xcode-select --install`. The plain scan works without them, and Neptune never launches the macOS "install developer tools" dialog on its own. |
 | `permission denied: ./neptune.sh` | The files lost their executable bit (common with zip downloads): `chmod +x *.sh`, and `xattr -dr com.apple.quarantine .` if macOS blocks them. |
 | Disk-usage numbers look low | Terminal lacks Full Disk Access; see [Requirements](#requirements). |
 | A finding is software you know and use | `./neptune.sh --acknowledge <n>` (or choose it in `--fix`). It stays listed and counted; it stops costing points. |

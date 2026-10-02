@@ -138,6 +138,18 @@ catalog_compare() {
                             !($2 in own)'
 }
 
+# brew_counts <formulae> <casks> — "1 formula and 2 casks", "3 formulae",
+# "1 cask": the counts in words, without "0 formulae and".
+brew_counts() {
+  local F=$1 C=$2 FW="formulae" CW="casks"
+  [ "$F" -eq 1 ] && FW="formula"
+  [ "$C" -eq 1 ] && CW="cask"
+  if [ "$F" -gt 0 ] && [ "$C" -gt 0 ]; then echo "$F $FW and $C $CW"
+  elif [ "$F" -gt 0 ]; then echo "$F $FW"
+  else echo "$C $CW"
+  fi
+}
+
 [ "${NEPTUNE_LIB:-}" = "1" ] && return 0
 
 UPGRADE=false
@@ -233,7 +245,7 @@ if command -v brew >/dev/null 2>&1; then
 
   CHECK=brew-outdated
   if [ "$NF" -gt 0 ] || [ "$NC" -gt 0 ]; then
-    upd "$NF Homebrew formulae and $NC casks have updates available"
+    upd "Homebrew has updates for $(brew_counts "$NF" "$NC")"
     [ "$NF" -gt 0 ] && { note "  formulae: $(printf '%s\n' "$OUT_F" | tr '\n' ' ')"; }
     [ "$NC" -gt 0 ] && { note "  casks:    $(printf '%s\n' "$OUT_C" | tr '\n' ' ')"; }
     $BREW_FRESH || note "  (the index could not be refreshed, so there may be more)"

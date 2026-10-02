@@ -8,8 +8,8 @@ development, so nobody has to rediscover them.
 ```bash
 git clone https://github.com/titomazzetta/neptune-mac.git
 cd neptune-mac/scripts
-./neptune.sh          # full read-only suite → one report on your Desktop
-./neptune.sh --html   # ...plus the readable report (needs the Command Line Tools)
+./neptune.sh          # full read-only suite → reports on your Desktop
+                      # (HTML report + AI brief need the Command Line Tools)
 ```
 
 Downloaded a release tarball instead of cloning? Verify it first, then clear

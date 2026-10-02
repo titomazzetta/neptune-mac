@@ -100,10 +100,11 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: neptune-report-macos
-          # The findings and HTML are sanitized; the combined .txt is not, so
-          # it stays on the runner.
+          # The findings, HTML and AI brief are sanitized; the combined .txt
+          # is not, so it stays on the runner.
           path: |
             ${{ steps.e2e.outputs.out }}/neptune_findings_*.json
             ${{ steps.e2e.outputs.out }}/neptune_report_*.html
+            ${{ steps.e2e.outputs.out }}/neptune_ai_brief_*.md
           retention-days: 14
           if-no-files-found: warn
