@@ -2,8 +2,16 @@
 
 Thanks for helping. A few rules keep Neptune safe and portable.
 
+## Issues
+Use the templates: **Bug report**, or **False positive / vendor quirk** (with the
+`--json --sanitize` entry and your evidence). Security problems go to the
+private report link, never a public issue.
+
 ## Before you open a PR
-- Run `tests/lint.sh` locally. CI runs the same checks and will block on failure.
+- Run `tests/lint.sh` locally. CI runs the same checks, and `main` is protected:
+  a PR can merge only when all three CI jobs pass (`.github/rulesets/main.json`).
+- Fill in the PR template — Summary, Changes, Safety, Verification. "Tests pass"
+  is not verification; say what ran, where, and what it showed.
 - Read `CLAUDE.md` — the bash 3.2 constraints and the read-only / human-in-the-loop
   guarantees are non-negotiable.
 

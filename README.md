@@ -1,6 +1,8 @@
 # 🔱 Neptune
 
 [![CI](https://github.com/titomazzetta/neptune-mac/actions/workflows/ci.yml/badge.svg)](https://github.com/titomazzetta/neptune-mac/actions/workflows/ci.yml)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/titomazzetta/neptune-mac/badge)](https://securityscorecards.dev/viewer/?uri=github.com/titomazzetta/neptune-mac)
+[![Release](https://img.shields.io/github/v/release/titomazzetta/neptune-mac)](https://github.com/titomazzetta/neptune-mac/releases)
 
 **An on-demand security audit, tune-up and cleanup kit for macOS. No daemons,
 no telemetry, no snake oil.**
@@ -81,23 +83,69 @@ each one is enforced by a test, not a promise:
 | **Advice is looked up, never generated.** Every command in the report is one you can find in `man` or Apple's docs, or is Neptune's own; none is a pipeline; an unknown gets "could not check" advice, not the fix for a failure. | `tests/test_render.py` checks every command, every check id, and every `./script --flag` the report tells you to run |
 | **Nothing leaves the machine.** Two opt-in flags reach the internet; nothing else does. Homebrew is run with its analytics off. | [`SECURITY.md`](SECURITY.md) gives the one `grep` that proves it |
 | **Releases are verifiable.** Built in CI from the tag, with SHA-256 sums and a signed build-provenance attestation. Actions pinned to commit SHAs, least-privilege tokens. | `.github/workflows/release.yml`; `gh attestation verify` |
+| **`main` only changes through reviewed, green PRs.** No direct pushes, no force-pushes; all three CI jobs must pass. The rule is a file in the repo, tested against the CI job names, and an independent OpenSSF Scorecard grades the setup weekly. | `.github/rulesets/main.json`; `tests/test_repo.py`; Scorecard badge above |
 
-## Quick start
+## Requirements
+
+- **macOS 13 Ventura or later** (run on 13, 15 and 26 — see [Compatibility](#compatibility)), Apple silicon or Intel.
+- **An administrator account.** The scan asks for your password once, for the few
+  read-only commands that need root to *see* more (every listening socket, root's
+  crontab, installed profiles). It never runs as root and never changes anything with it.
+- **Nothing to install.** Optional: the Xcode Command Line Tools
+  (`xcode-select --install`) for the HTML/JSON reports, which need python3;
+  Homebrew, if you use it, is checked for updates and cache bloat.
+- **Recommended: Full Disk Access for Terminal** (System Settings → Privacy &
+  Security → Full Disk Access → add Terminal). Without it macOS hides a few
+  protected folders from Terminal, so some disk-usage numbers read low. Neptune
+  does not read your mail, messages or browsing data either way.
+
+## Install
+
+**From a release (verifiable):**
 
 ```bash
-git clone https://github.com/titomazzetta/neptune-mac.git
-cd neptune-mac/scripts
-
-./neptune.sh              # the full read-only suite: verdict, scores, one report
-./neptune.sh --html       # ...plus the readable report with posture and advice
+gh release download --repo titomazzetta/neptune-mac --pattern 'neptune-mac-*.tar.gz' --pattern SHA256SUMS
+shasum -a 256 -c SHA256SUMS
+gh attestation verify neptune-mac-*.tar.gz --repo titomazzetta/neptune-mac
+tar xzf neptune-mac-*.tar.gz && cd neptune-mac-*/scripts
 ```
 
-It asks for your password once, for the handful of commands that need root to
-*see* more (listening sockets, root's crontab, installed profiles); it never
-changes anything with it. **Do not run it with `sudo`** — every script refuses.
+The checksum proves the download is intact; the attestation proves it was built
+by this repository's release workflow from a tagged commit — not on someone's
+laptop. (A browser download adds macOS's quarantine flag; clear it with
+`xattr -dr com.apple.quarantine .` after verifying.)
 
-Nothing to install. `--html` and `--json` need python3, which comes with the
-Xcode Command Line Tools (`xcode-select --install`); the scan itself does not.
+**Or from source:**
+
+```bash
+git clone https://github.com/titomazzetta/neptune-mac.git && cd neptune-mac/scripts
+```
+
+**Do not run anything with `sudo`** — every script refuses, and asks for
+privileges itself only where it needs them.
+
+## Your first run
+
+1. **Scan.** Read-only; takes a few minutes, mostly waiting on `softwareupdate`
+   and `brew update`.
+   ```bash
+   ./neptune.sh --html
+   ```
+2. **Read.** The terminal ends with a verdict, four scores and one numbered list.
+   The HTML report (on your Desktop; `--out DIR` to change) opens with the
+   security posture panel, then every finding with what it means, what to do
+   and the exact command — plus every check that passed.
+3. **Fix.** Walk the list one item at a time; nothing changes without a `y`.
+   Vendor helpers you recognize can be acknowledged from here too.
+   ```bash
+   ./neptune.sh --fix
+   ```
+4. **Re-measure.** Accept the re-scan offered at the end. The HTML report shows
+   each score's change since the last run — the proof that the fixes worked.
+
+Exit codes make it scriptable: `0` healthy · `1` needs attention ·
+`2` incomplete (something could not be checked) · `64` usage error ·
+`77` administrator privileges refused.
 
 ## Fixing what it found
 
@@ -204,6 +252,18 @@ Apple has been moving away from. If it stops answering, the check reports
 than assuming the firewall is on. A check that silently degrades to "fine" is
 how a security tool starts lying to you.
 
+## Troubleshooting
+
+| You see | What it means |
+|---|---|
+| `Could not obtain administrator privileges` (exit 77) | The password prompt was declined, or this account is not an administrator. Nothing was scanned. |
+| **COULD NOT BE CHECKED** items, exit 2 | A check could not run — no network for update checks, an unreadable file, a command that gave no answer. Neptune reports that as unknown, never as a pass. The finding says which check and why. |
+| `--html, --json and --replay need python3` | Install the Command Line Tools: `xcode-select --install`. The plain scan works without them, and Neptune never launches the macOS "install developer tools" dialog on its own. |
+| `permission denied: ./neptune.sh` | The files lost their executable bit (common with zip downloads): `chmod +x *.sh`, and `xattr -dr com.apple.quarantine .` if macOS blocks them. |
+| Disk-usage numbers look low | Terminal lacks Full Disk Access; see [Requirements](#requirements). |
+| A finding is software you know and use | `./neptune.sh --acknowledge <n>` (or choose it in `--fix`). It stays listed and counted; it stops costing points. |
+| It flagged something and you are not sure | Read the finding's advice in the HTML report, then [`docs/reading-reports.md`](docs/reading-reports.md). If it is a false positive, [open a report](https://github.com/titomazzetta/neptune-mac/issues/new/choose) with the sanitized JSON. |
+
 ## What it does not do
 
 It is not antivirus and not a compromise assessment. It has no malware
@@ -213,7 +273,7 @@ where it could not look. The full list is in [`SECURITY.md`](SECURITY.md).
 
 ## Status
 
-Version 1.0.0. See [`CHANGELOG.md`](CHANGELOG.md) for what changed,
+Version 1.1.0. See [`CHANGELOG.md`](CHANGELOG.md) for what changed,
 [`ROADMAP.md`](ROADMAP.md) for what is next, and
 [`CONTRIBUTING.md`](CONTRIBUTING.md) to help. A demo recording is pending; the
 recording and scrubbing procedure is in [`docs/demo/RECORDING.md`](docs/demo/RECORDING.md).

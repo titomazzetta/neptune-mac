@@ -1,0 +1,50 @@
+name: Bug report
+description: Something Neptune did wrong — a crash, a wrong result, a confusing message
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        If the bug is that Neptune **deleted something it shouldn't have**, **reported "healthy" when it wasn't**, or **sent data off the machine**, please use the private security report instead (see the link on the new-issue page). Those are treated as the most serious class of bug.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: The command you ran
+      placeholder: "./neptune.sh --html"
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Relevant output
+      description: The verdict block, or the lines around the problem. Replace your hostname, username and IP addresses, or use `--sanitize` output.
+      render: text
+  - type: input
+    id: exit
+    attributes:
+      label: Exit code
+      description: "Run `echo $?` right after the command. 0 healthy, 1 attention, 2 incomplete, 64 usage, 77 no admin rights."
+  - type: input
+    id: env
+    attributes:
+      label: macOS version, chip, Neptune version
+      placeholder: "macOS 26.6.2, Apple silicon, Neptune 1.1.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: shell
+    attributes:
+      label: How was it run?
+      options:
+        - Terminal.app, as my normal user
+        - Another terminal (iTerm2, etc.)
+        - Over SSH
+        - Other

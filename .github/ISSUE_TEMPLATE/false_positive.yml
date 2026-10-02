@@ -1,0 +1,44 @@
+name: False positive / vendor quirk
+description: Neptune flagged something you know is legitimate (an audio licence daemon, a VM helper, a dev tool)
+title: "[false positive] "
+labels: ["false-positive"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks — these reports are how `vendor-quirks.tsv` grows. Two things to know first:
+        - On your own Mac you can already silence it: `./neptune.sh --acknowledge <n>` (or choose it in `--fix`). It stays listed and counted, it just stops costing points.
+        - A catalogue entry **labels** a finding; it never suppresses one, and it only describes what the software does — it never declares it safe. So we need evidence, not just "it's fine".
+  - type: input
+    id: finding
+    attributes:
+      label: The finding's title, exactly as Neptune printed it
+      placeholder: "UNSIGNED persistence: com.example.helper runs /Library/..."
+    validations:
+      required: true
+  - type: input
+    id: software
+    attributes:
+      label: Which software this is (vendor, product, version)
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: How you know it belongs to that software — e.g. the vendor's installer placed it, `codesign -dvv <path>` output, the vendor's own docs or support article.
+    validations:
+      required: true
+  - type: textarea
+    id: json
+    attributes:
+      label: Sanitized findings (optional)
+      description: The matching entry from `./neptune.sh --json --sanitize`. Never paste an unsanitized report — it contains your hostname, username, addresses and app inventory.
+      render: json
+  - type: input
+    id: env
+    attributes:
+      label: macOS version and Neptune version
+      placeholder: "macOS 26.6.2, Neptune 1.1.0"
+    validations:
+      required: true

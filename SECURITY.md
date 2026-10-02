@@ -375,9 +375,12 @@ job that needs it. Dependabot keeps the pins current. See
 ## Reporting a problem
 
 If you find a bug that causes Neptune to delete something it shouldn't, to report
-a false "all clear", or to leak data off the machine, please open an issue — or
-if you'd rather not do so publicly, contact the maintainer directly through the
-address on the GitHub profile.
+a false "all clear", or to leak data off the machine, please report it
+**privately** through GitHub's
+[private vulnerability reporting](https://github.com/titomazzetta/neptune-mac/security/advisories/new),
+not as a public issue. You will get an acknowledgement, and the fix will credit
+you unless you prefer otherwise. Everything else — crashes, wrong results,
+false positives — belongs in a [public issue](https://github.com/titomazzetta/neptune-mac/issues/new/choose).
 
 A false "all clear" is treated as the most serious class of bug in this project,
 above crashes. `docs/DEVLOG.md` documents every one found so far, including the
