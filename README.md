@@ -288,7 +288,7 @@ how a security tool starts lying to you.
 |---|---|
 | `Could not obtain administrator privileges` (exit 77) | The password prompt was declined, or this account is not an administrator. Nothing was scanned. |
 | **COULD NOT BE CHECKED** items, exit 2 | A check could not run — no network for update checks, an unreadable file, a command that gave no answer. Neptune reports that as unknown, never as a pass. The finding says which check and why. |
-| No HTML report or AI brief, or `--replay needs python3` | Install the Command Line Tools: `xcode-select --install`. The plain scan works without them, and Neptune never launches the macOS "install developer tools" dialog on its own. |
+| No HTML report or AI brief | The end of the run says why. *No python3 was found*: install the Command Line Tools (`xcode-select --install`). *A python3 is there but cannot run*: usually a leftover Intel-only python.org install on an Apple-silicon Mac; Neptune uses another working python3 if it finds one and tells you which, and removing the leftover (or installing Rosetta) silences the warning. The plain scan needs none of this, and Neptune never launches the macOS "install developer tools" dialog on its own. |
 | `permission denied: ./neptune.sh` | The files lost their executable bit (common with zip downloads): `chmod +x *.sh`, and `xattr -dr com.apple.quarantine .` if macOS blocks them. |
 | Disk-usage numbers look low | Terminal lacks Full Disk Access; see [Requirements](#requirements). |
 | A finding is software you know and use | `./neptune.sh --acknowledge <n>` (or choose it in `--fix`). It stays listed and counted; it stops costing points. |

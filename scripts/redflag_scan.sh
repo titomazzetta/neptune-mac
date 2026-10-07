@@ -589,18 +589,20 @@ $R"
 done
 
 CHECK=browser-extensions
+# The first python3 that actually RUNS (scripts/find_python.sh). This used to
+# take whatever PATH offered without running it, so a python3 that could not
+# execute produced an empty extension list — which read as "none found".
 PYOK=false
-P3=$(command -v python3 2>/dev/null || true)
-if [ -n "$P3" ] && [ -f "$DIR/neptune_inspect.py" ]; then
-  if [ "$P3" != "/usr/bin/python3" ] || xcode-select -p >/dev/null 2>&1; then PYOK=true; fi
-fi
+# shellcheck source=find_python.sh
+. "$DIR/find_python.sh"
+if [ -f "$DIR/neptune_inspect.py" ] && find_python; then PYOK=true; P3=$NEP_PY; fi
 if [ -z "$ROOTS" ]; then
   note ""
   note "No Chromium-family browser profiles found."
 elif ! $PYOK; then
   note ""
-  note "Chromium-family extensions not inspected: needs python3 (xcode-select --install)."
-  CATEGORY=security; record info "Browser extension permissions were not inspected, because python3 is not installed"
+  note "Chromium-family extensions not inspected: $NEP_PY_WHY."
+  CATEGORY=security; record info "Browser extension permissions were not inspected, because no working python3 was found"
 else
   EXT_TMP=$(mktemp "${TMPDIR:-/tmp}/neptune-ext.XXXXXX")
   printf '%s\n' "$ROOTS" | grep -v '^$' | while IFS= read -r R; do printf '%s\0' "$R"; done \

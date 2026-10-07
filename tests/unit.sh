@@ -248,6 +248,33 @@ t_section "clean_caches.sh — selection parser"
 )
 
 ############################################################
+t_section "find_python.sh — the first python3 that RUNS (laptop, 2026-10)"
+############################################################
+(
+  REAL=$(command -v python3 2>/dev/null || true)
+  mkdir -p "$T/badpy" "$T/oldpy"
+  printf '#!/bin/sh\nexit 126\n' > "$T/badpy/python3"; chmod +x "$T/badpy/python3"
+  printf '#!/bin/sh\nexit 3\n' > "$T/oldpy/python3"; chmod +x "$T/oldpy/python3"
+  unset NEPTUNE_PYTHON
+  # shellcheck source=/dev/null
+  . scripts/find_python.sh
+  if [ -n "$REAL" ]; then
+    PATH="$T/badpy:$PATH" NEP_PY_CANDIDATES="$REAL" find_python
+    t_is "a python3 on PATH that cannot run is skipped for one that does" "$REAL" "$NEP_PY"
+    t_is "...and the person is told which one failed and why" "yes" \
+       "$(printf '%s' "$NEP_PY_NOTE" | grep -q "badpy/python3 is there but cannot run" && echo yes || echo no)"
+  fi
+  NEP_PY_CANDIDATES="$T/oldpy/python3" PATH="$T/badpy:/bin:/usr/bin" find_python; RC=$?
+  t_is "nothing runs: find_python fails" "1" "$RC"
+  t_is "...and says why, naming the first failure" "yes" \
+     "$(printf '%s' "$NEP_PY_WHY" | grep -q "badpy/python3 is there but cannot run" && echo yes || echo no)"
+  NEP_PY_CANDIDATES="$T/oldpy/python3" PATH="/nonexistent" find_python
+  t_is "a python3 older than 3.6 is named as such" "$T/oldpy/python3 is older than Python 3.6" "$NEP_PY_WHY"
+  NEPTUNE_PYTHON="$T/oldpy/python3" find_python
+  t_is "one run, one interpreter: NEPTUNE_PYTHON from neptune.sh wins" "$T/oldpy/python3" "$NEP_PY"
+)
+
+############################################################
 t_section "fix.sh — the guided fixer"
 ############################################################
 (

@@ -454,20 +454,16 @@ nep_append_history() {
   ' "$SC" >> "$H"
 }
 
-# python_ok — is there a python3 we can run WITHOUT side effects?
-#
-# On a Mac without the Xcode Command Line Tools, /usr/bin/python3 is a stub
-# that pops a GUI "install developer tools" dialog. The old code assumed "python3
-# ships with macOS" (it does not), so --json, --html and the browser-extension
-# check could all throw a system dialog in the middle of a scan. The core scan
-# and verdict never need python; only the optional outputs do.
+# python_ok — is there a python3 we can run WITHOUT side effects? Picks the
+# first candidate that actually runs (scripts/find_python.sh), sets NEP_PY,
+# and exports it as NEPTUNE_PYTHON so every scan in this run uses the same
+# one. NEP_PY_WHY says why not, when nothing runs. The core scan and verdict
+# never need python; only the optional outputs do.
+# shellcheck source=find_python.sh
+. "$DIR/find_python.sh"
 python_ok() {
-  local P
-  P=$(command -v python3 2>/dev/null) || return 1
-  if [ "$(uname -s)" = "Darwin" ] && [ "$P" = "/usr/bin/python3" ]; then
-    xcode-select -p >/dev/null 2>&1 || return 1
-  fi
-  "$P" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 6) else 1)' >/dev/null 2>&1
+  find_python || return 1
+  export NEPTUNE_PYTHON="$NEP_PY"
 }
 
 # nep_run_pipeline <findings> <allowfile> <workdir> <run-label>
@@ -585,8 +581,7 @@ if $SANITIZE_OUT && ! $JSON_OUT && ! $HTML_OUT; then
 fi
 # Refuse BEFORE a five-minute scan, not after it.
 if { $JSON_OUT || $HTML_OUT || [ -n "$REPLAY" ]; } && ! python_ok; then
-  echo "--html, --json and --replay need python3, which is not usable here." >&2
-  echo "Install the Xcode Command Line Tools:  xcode-select --install" >&2
+  echo "--html, --json and --replay need python3, and none here runs: $NEP_PY_WHY." >&2
   echo "(The plain scan and verdict need nothing: run ./neptune.sh without them.)" >&2
   exit 64
 fi
@@ -644,7 +639,7 @@ FINDINGS="$TMP/findings.txt"
 render() {
   local FMT=$1 OUTF=$2 SAN
   SAN=$($SANITIZE_OUT && echo --sanitize || true)
-  PYTHONUTF8=1 python3 "$RENDERER" --format "$FMT" $SAN \
+  PYTHONUTF8=1 "$NEP_PY" "$RENDERER" --format "$FMT" $SAN \
     --scored "$SCORED" --scores "$SCORES" --listing "$LISTING" \
     --verdict-key "$VKEY" --verdict "$VERDICT" \
     --integrity "$INTEGRITY" --integrity-why "$WHY" \
@@ -666,13 +661,14 @@ if [ -n "$REPLAY" ]; then
   mkdir -p "$OUT_DIR" || exit 64
   RALLOW="$TMP/allow"; : > "$RALLOW"
   case "$REPLAY" in
-    *.json) PYTHONUTF8=1 python3 "$RENDERER" --json-to-records "$REPLAY" \
+    *.json) PYTHONUTF8=1 "$NEP_PY" "$RENDERER" --json-to-records "$REPLAY" \
               --records-out "$FINDINGS" --allow-out "$RALLOW" || exit 64 ;;
     *)      cp "$REPLAY" "$FINDINGS" ;;
   esac
   nep_run_pipeline "$FINDINGS" "$RALLOW" "$TMP" "replay of $(basename "$REPLAY")"
   RENDER_REPLAY="$(basename "$REPLAY")"
   printf '\n  %sReplayed from %s — nothing was scanned.%s\n' "$DIM" "$(basename "$REPLAY")" "$RST"
+  [ -n "${NEP_PY_NOTE:-}" ] && printf '  %s%s %s.%s\n' "$YEL" "$SYM_WARN" "$NEP_PY_NOTE" "$RST"
   render_verdict "$SCORED" "$SCORES" "$LISTING" "$INTEGRITY" "$WHY"
   if $HTML_OUT; then
     BRIEF_NAME=neptune_ai_brief_replay.md
@@ -844,12 +840,17 @@ nep_append_history "$HISTORY" "$SCORES" "$(date '+%Y-%m-%d %H:%M')" "$VKEY"
 render_verdict "$SCORED" "$SCORES" "$LISTING" "$INTEGRITY" "$WHY"
 echo
 printf '  %sReports%s %s%s · %ss%s\n' "$BOLD" "$RST" "$DIM" "$OUT_DIR" "$((SECONDS - RUN_START))" "$RST"
+if [ -n "${NEP_PY_NOTE:-}" ]; then
+  printf '         %s%s %s.%s\n' "$YEL" "$SYM_WARN" "$NEP_PY_NOTE" "$RST"
+fi
 if $HTML_OUT; then
   printf '         %s  %sthe full picture, with what each fix does%s\n' "$(basename "$HTML_PATH")" "$DIM" "$RST"
   printf '         %s  %ssanitized, ready to paste into an AI for a second opinion%s\n' "$(basename "$AI_PATH")" "$DIM" "$RST"
 else
   printf '         %s\n' "$(basename "$REPORT")"
-  printf '         %sInstall the Command Line Tools (xcode-select --install) for the HTML report.%s\n' "$DIM" "$RST"
+  if ! $NO_HTML; then
+    printf '         %sNo HTML report or AI brief: %s.%s\n' "$DIM" "${NEP_PY_WHY:-python3 is not available}" "$RST"
+  fi
 fi
 echo
 

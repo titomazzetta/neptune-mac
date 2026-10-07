@@ -117,23 +117,19 @@ join_names() {
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 
-# python_ok — same contract as neptune.sh: never run the /usr/bin/python3 stub
-# that pops an install dialog on a Mac without the Command Line Tools.
-python_ok() {
-  local P
-  P=$(command -v python3 2>/dev/null) || return 1
-  if [ "$(uname -s)" = "Darwin" ] && [ "$P" = "/usr/bin/python3" ]; then
-    xcode-select -p >/dev/null 2>&1 || return 1
-  fi
-  "$P" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 6) else 1)' >/dev/null 2>&1
-}
+# python_ok — same contract as neptune.sh (scripts/find_python.sh): the first
+# python3 that actually runs, never the /usr/bin/python3 install-dialog stub.
+# shellcheck source=find_python.sh
+. "$DIR/find_python.sh"
+python_ok() { find_python; }
 
 # catalog_compare <cask-catalog> <installed-cask-tokens> — "App.app<TAB>version"
 # lines on stdin; prints app, cask, installed, latest, behind|current|unknown for
 # the apps the catalog knows. Casks already installed are dropped: brew outdated
 # reports those, and one update should be one finding.
 catalog_compare() {
-  python3 "$DIR/neptune_inspect.py" cask-versions "$1" 2>/dev/null \
+  [ -n "${NEP_PY:-}" ] || find_python || return 0
+  "$NEP_PY" "$DIR/neptune_inspect.py" cask-versions "$1" 2>/dev/null \
     | INST="$2" awk -F'\t' 'BEGIN { n = split(ENVIRON["INST"], a, "\n"); for (i = 1; i <= n; i++) own[a[i]] = 1 }
                             !($2 in own)'
 }

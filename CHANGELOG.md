@@ -11,6 +11,18 @@ explains each in full — symptom, root cause, fix, and what was learned.
 
 ## [Unreleased]
 
+### Fixed
+- **"Install the Command Line Tools" on a Mac that had them.** On the first
+  laptop run, PATH offered a leftover `/usr/local/bin/python3` that could not
+  execute (exit 126), ahead of a working Apple `/usr/bin/python3`. Neptune
+  asked PATH, got the broken one, skipped the HTML report and blamed the
+  developer tools. `scripts/find_python.sh` now tries each candidate, uses the
+  first that actually runs (one interpreter for the whole run), says which one
+  failed and why, and names the real reason when none runs.
+- The browser-extension check took PATH's python3 without running it first,
+  so an interpreter that could not start produced an empty list. It now uses
+  the same finder, and says it could not inspect rather than finding nothing.
+
 ## [1.2.0] — 2026-10-07
 
 Neptune learns to talk like a person and to show its work: plain words in the

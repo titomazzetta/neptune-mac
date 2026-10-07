@@ -1217,6 +1217,25 @@ The redesign was tested against fixtures. The first run on the development Mac
   not have. Unknowns now say whose it probably is, and that it couldn't be
   confirmed.
 
+## Bug 23 — "install the tools you already have"
+
+The first run on a second Mac, a MacBook Pro, produced no HTML report and the
+advice to install the Command Line Tools. They were installed. In zsh,
+`python3 --version` printed Apple's 3.9.6; inside Neptune's bash,
+`command -v python3` found `/usr/local/bin/python3` first, and it exited 126:
+it could not execute at all, most likely an Intel-only leftover from an old
+python.org installer on Apple silicon.
+
+Two mistakes compounded. The check asked "which python3 is on PATH?" when the
+question that matters is "which python3 runs?", and the message named one
+cause for every failure. The fix tries each candidate in order, uses the first
+that runs and exports it so every scan in the run uses the same one, and turns
+an exit status into a sentence ("is there but cannot run", "is a broken link",
+"is older than 3.6"). It also found a quieter version of the same bug: the
+browser-extension check took PATH's python3 without running it, so a broken
+interpreter produced an empty list, which reads as "no extensions". A check
+that could not run must never look like a check that found nothing.
+
 ## Cross-cutting practices that came out of these
 
 - **CI as a regression net for exactly these bugs.** Linux runs shellcheck,
