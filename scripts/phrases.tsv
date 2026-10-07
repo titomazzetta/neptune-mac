@@ -72,7 +72,7 @@ config-profiles	could not	-	-	Couldn't list configuration profiles	-
 config-profiles	.	-	-	Configuration profiles are installed	They can set proxies, DNS and trusted certificates.
 etc-hosts	.	-	-	/etc/hosts has custom entries	Fine if you added them.
 browser-extensions	holds	' holds.*$	^[^ ]+ extension '	The {s} browser extension can see or reroute your browsing	-
-browser-extensions	python3	-	-	Browser extensions weren't inspected (python3 isn't installed)	-
+browser-extensions	python3	-	-	Browser extensions weren't inspected (no working python3)	-
 double-nat	could not	-	-	Couldn't trace the route to check for double NAT	-
 double-nat	.	-	-	Your ISP's box shows up as a second router	Often just IP passthrough. Your router's WAN address settles it.
 cgnat	^CGNAT	-	-	Your ISP shares one public address among customers (CGNAT)	Only matters for incoming connections.

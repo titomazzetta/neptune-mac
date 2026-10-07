@@ -90,7 +90,8 @@ These are hard rules. Breaking any of them is a regression, even if the code
 ```
 scripts/         the eleven Neptune scripts, the renderer (neptune_render.py), the
                  extension inspector (neptune_inspect.py), vendor-quirks.tsv,
-                 and the phrasebook (phrases.tsv)
+                 the phrasebook (phrases.tsv), and find_python.sh (sourced:
+                 the one way any script picks a python3 — the first that runs)
 tests/           lint.sh (runs everything), unit.sh, test_render.py,
                  blast_radius.sh, macos.sh, e2e_assert.py, fixtures/
 docs/            extended docs, the report-reading guide, the AI-advisor prompt
