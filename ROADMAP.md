@@ -57,6 +57,13 @@ Removed deliberately, so they stop reading as debt:
 
 ## Done
 
+**v1.2.0** — a voice and a report people can read: plain-words headlines from
+one phrasebook, a one-screen terminal summary, an HTML report with an
+explanation ladder (Simple / Detailed / Technical) and recommended commands,
+`--fix --only` as a queue with keep / uninstall / skip, a sanitized AI brief
+on every run, and branch protection, Scorecard and community files for the
+repository. Calibrated against the first real run on macOS 27.
+
 **v1.1.0** — guided fixing: `./neptune.sh --fix` walks the last run's findings
 with the exact command for each and a y/N per item, hands deletion to the
 confirmed scripts, logs every change, and re-scans at the end. Self-updating

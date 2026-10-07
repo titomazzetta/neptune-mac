@@ -297,7 +297,7 @@ where it could not look. The full list is in [`SECURITY.md`](SECURITY.md).
 
 ## Status
 
-Version 1.1.0. See [`CHANGELOG.md`](CHANGELOG.md) for what changed,
+Version 1.2.0. See [`CHANGELOG.md`](CHANGELOG.md) for what changed,
 [`ROADMAP.md`](ROADMAP.md) for what is next, and
 [`CONTRIBUTING.md`](CONTRIBUTING.md) to help. A demo recording is pending; the
 recording and scrubbing procedure is in [`docs/demo/RECORDING.md`](docs/demo/RECORDING.md).

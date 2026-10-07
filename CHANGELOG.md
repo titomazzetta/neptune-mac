@@ -11,6 +11,13 @@ explains each in full — symptom, root cause, fix, and what was learned.
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-10-07
+
+Neptune learns to talk like a person and to show its work: plain words in the
+terminal, an HTML report you can read at three depths, a fix queue, an AI
+brief for a second opinion — and the repository around it gets the guard
+rails a security tool should have.
+
 ### Changed — how Neptune reads
 - **Plain words everywhere.** `scripts/phrases.tsv` turns each recorded title
   into a headline and a one-line context ("The firewall is off" / "A common
