@@ -239,6 +239,12 @@ When you have decided, `./neptune.sh --acknowledge 5` (or `5,7`) marks item 5
 *of the list you just read* — the numbering is saved, so it cannot drift under
 you. Acknowledged findings stay listed and counted; they only stop deducting.
 
+**Staying current.** Run Neptune about once a month, and after installing
+anything new. Before you do, update it: `git pull` in the folder you cloned
+(or download the newer release and verify it the same way). The very first run
+on a Mac takes the snapshot that change detection compares against, so "new
+since your last snapshot" means something from the second run on.
+
 **Re-running.** Each run records its scores and when each finding was first and
 last seen, so the next report shows what moved and what you fixed. Local plain
 text in `~/.neptune`; delete it to forget.
