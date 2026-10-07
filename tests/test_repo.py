@@ -96,5 +96,22 @@ class Community(unittest.TestCase):
             self.assertTrue(os.path.exists(os.path.join(REPO, f)), f)
 
 
+class VersionIsOneNumber(unittest.TestCase):
+    """The version lives in neptune.sh; the README, the changelog and the issue
+    templates must agree with it, or a release says one thing and the tool
+    another (1.2.0 shipped its features while still printing 1.1.0)."""
+
+    def test_everything_names_the_same_version(self):
+        with open(os.path.join(REPO, "scripts", "neptune.sh"), encoding="utf-8") as fh:
+            code = re.search(r'^NEPTUNE_VERSION="([^"]+)"', fh.read(), re.M).group(1)
+        with open(os.path.join(REPO, "README.md"), encoding="utf-8") as fh:
+            self.assertIn("Version %s." % code, fh.read())
+        with open(os.path.join(REPO, "CHANGELOG.md"), encoding="utf-8") as fh:
+            self.assertRegex(fh.read(), r"(?m)^## \[%s\] — \d{4}-\d{2}-\d{2}$" % re.escape(code))
+        for name in ("bug_report.yml", "false_positive.yml"):
+            with open(os.path.join(REPO, ".github", "ISSUE_TEMPLATE", name), encoding="utf-8") as fh:
+                self.assertIn("Neptune %s" % code, fh.read(), name)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -36,7 +36,7 @@ body:
     id: env
     attributes:
       label: macOS version, chip, Neptune version
-      placeholder: "macOS 26.6.2, Apple silicon, Neptune 1.1.0"
+      placeholder: "macOS 26.6.2, Apple silicon, Neptune 1.2.0"
     validations:
       required: true
   - type: dropdown

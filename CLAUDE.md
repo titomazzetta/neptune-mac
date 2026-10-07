@@ -190,7 +190,11 @@ records, the posture panel, ad-hoc signing as its own class, the cache cleaner,
 and tests that source the shipping code on macOS under bash 3.2.
 
 v1.1.0 added the guided fixer (`--fix`) and the Homebrew-catalog comparison
-for self-updating apps. Next is **login items from Background Task Management**
+for self-updating apps. v1.2.0 added the phrasebook, the explanation-ladder
+report, the fix queue and the AI brief. Two false alarms from real runs are
+queued first: an empty launch-agent plist (it runs nothing, so it should not
+be an unknown) and a helper whose binary vanished because its app updated
+while running (restart the app, not a red flag). After those is **login items from Background Task Management**
 (`sfltool dumpbtm`) — which needs a real captured fixture before any parser is
 written. Unattended fixing, a bundled model advisor and a Windows sibling are
 explicitly NOT planned.

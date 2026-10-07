@@ -44,7 +44,7 @@ set -u
 NEP_LOCALE="${LC_ALL:-${LC_CTYPE:-${LANG:-}}}"
 export LC_ALL=C
 
-NEPTUNE_VERSION="1.1.0"
+NEPTUNE_VERSION="1.2.0"
 
 # Style. Colour only on a real terminal, never with NO_COLOR (no-color.org) or
 # TERM=dumb, so a piped or saved run is plain text. Symbols only where the

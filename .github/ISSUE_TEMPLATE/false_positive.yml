@@ -39,6 +39,6 @@ body:
     id: env
     attributes:
       label: macOS version and Neptune version
-      placeholder: "macOS 26.6.2, Neptune 1.1.0"
+      placeholder: "macOS 26.6.2, Neptune 1.2.0"
     validations:
       required: true
