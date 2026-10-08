@@ -11,6 +11,17 @@ explains each in full — symptom, root cause, fix, and what was learned.
 
 ## [Unreleased]
 
+### Added
+- **Updates, app by app** in the HTML report, the JSON (`software`) and the AI
+  brief. `check_updates.sh` already knew which apps were behind; the report only
+  showed counts ("1 formula and 2 casks"). Now every outdated item is listed with
+  its installed and latest version, grouped by how it gets updated: Homebrew
+  (`brew upgrade`), Apple (Software Update), the App Store, or the app itself /
+  its developer (with `brew install --cask --adopt` as the way to hand it to
+  Homebrew). Apps Homebrew's catalog does not know are listed as "check these
+  yourself" — never as current — and the run now says so instead of staying
+  silent. The terminal shows versions too: `wget 1.21.3 -> 1.21.4`.
+
 ### Fixed
 - **"Install the Command Line Tools" on a Mac that had them.** On the first
   laptop run, PATH offered a leftover `/usr/local/bin/python3` that could not

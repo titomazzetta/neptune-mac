@@ -108,6 +108,53 @@ clip() {
   } END { print s }'
 }
 
+# inv <kind> <name> <installed> <latest> <hint> — one row of the software
+# inventory the reports turn into "what to update, and how", app by app. Only
+# written when neptune.sh asks for it (NEPTUNE_INVENTORY); the scan itself
+# prints the same facts. Kinds:
+#   apple         an Apple update softwareupdate offers      (hint: its label)
+#   brew-formula  a Homebrew command-line package with a newer version
+#   brew-cask     a Homebrew-managed app with a newer version
+#   app-store     a Mac App Store app with an update
+#   app-behind    a self-updating app older than Homebrew's catalog (hint: cask)
+#   app-current   a self-updating app that matches the catalog
+#   app-unchecked a self-updating app the catalog does not know
+inv() {
+  [ -n "${NEPTUNE_INVENTORY:-}" ] || return 0
+  printf '%s\t%s\t%s\t%s\t%s\n' "$1" "$(printf '%s' "$2" | tr '\t\n' '  ')" \
+    "$(printf '%s' "$3" | tr '\t\n' '  ')" "$(printf '%s' "$4" | tr '\t\n' '  ')" \
+    "$(printf '%s' "$5" | tr '\t\n' '  ')" >> "$NEPTUNE_INVENTORY"
+}
+
+# brew_rows — `brew outdated --verbose` lines on stdin, "name<TAB>installed<TAB>latest"
+# out. Formulae read "wget (1.21.3) < 1.21.4", casks "firefox (118.0) != 119.0",
+# and a formula with several versions kept reads "(1.0, 1.1)": the newest wins.
+brew_rows() {
+  awk '{
+    name = $1; latest = $NF; inst = $0
+    if (match(inst, /\([^)]*\)/)) inst = substr(inst, RSTART + 1, RLENGTH - 2); else inst = ""
+    n = split(inst, v, ", "); inst = v[n]
+    if (name != "") printf "%s\t%s\t%s\n", name, inst, latest
+  }'
+}
+
+# mas_rows — `mas outdated` lines on stdin ("497799835 Xcode (15.0 -> 15.1)"),
+# "name<TAB>installed<TAB>latest" out.
+mas_rows() {
+  awk '{
+    line = $0; sub(/^[ \t]*[0-9]+[ \t]+/, "", line)
+    inst = ""; latest = ""
+    if (match(line, /\([^()]*->[^()]*\)[ \t]*$/)) {
+      vers = substr(line, RSTART + 1, RLENGTH - 1); sub(/\)[ \t]*$/, "", vers)
+      line = substr(line, 1, RSTART - 1)
+      split(vers, p, "->"); inst = p[1]; latest = p[2]
+      gsub(/^[ \t]+|[ \t]+$/, "", inst); gsub(/^[ \t]+|[ \t]+$/, "", latest)
+    }
+    gsub(/[ \t]+$/, "", line)
+    if (line != "") printf "%s\t%s\t%s\n", line, inst, latest
+  }'
+}
+
 # join_names — newline-separated names to "a, b, c and 4 more" (at most five
 # named, so a finding title stays readable).
 join_names() {
@@ -191,6 +238,9 @@ if [ "$SU_RC" -eq 143 ]; then
 elif [ -n "$UPDATES" ]; then
   N=$(printf '%s\n' "$UPDATES" | grep -c .)
   upd "Apple software updates are pending ($N): $(printf '%s\n' "$UPDATES" | join_names)"
+  printf '%s\n' "$SU_PARSED" | awk -F'\t' '$1 == "update"' | while IFS="$(printf '\t')" read -r _K LABEL NAME; do
+    inv apple "$NAME" "" "" "$LABEL"
+  done
 elif printf '%s' "$SU_OUT" | grep -q "No new software available"; then
   pass "macOS and Apple apps are up to date"
 elif [ -n "$UPGRADES" ]; then
@@ -234,16 +284,25 @@ if command -v brew >/dev/null 2>&1; then
   # Casks that update themselves (Chrome, Docker, ...) are NOT listed as out of
   # date: their own updater owns them, and `--greedy` would report every one of
   # them on every run — noise that trains people to skip this section.
-  OUT_F=$(brew outdated --formula --quiet 2>/dev/null)
-  OUT_C=$(brew outdated --cask --quiet 2>/dev/null)
-  NF=$(printf '%s' "$OUT_F" | grep -c .)
-  NC=$(printf '%s' "$OUT_C" | grep -c .)
+  # Names and versions in one pass: "wget 1.21.3 -> 1.21.4".
+  ROWS_F=$(brew outdated --formula --verbose 2>/dev/null | brew_rows)
+  ROWS_C=$(brew outdated --cask --verbose 2>/dev/null | brew_rows)
+  NF=$(printf '%s' "$ROWS_F" | grep -c .)
+  NC=$(printf '%s' "$ROWS_C" | grep -c .)
 
   CHECK=brew-outdated
   if [ "$NF" -gt 0 ] || [ "$NC" -gt 0 ]; then
     upd "Homebrew has updates for $(brew_counts "$NF" "$NC")"
-    [ "$NF" -gt 0 ] && { note "  formulae: $(printf '%s\n' "$OUT_F" | tr '\n' ' ')"; }
-    [ "$NC" -gt 0 ] && { note "  casks:    $(printf '%s\n' "$OUT_C" | tr '\n' ' ')"; }
+    printf '%s\n' "$ROWS_F" | while IFS="$(printf '\t')" read -r NAME FROM TO; do
+      [ -n "$NAME" ] || continue
+      printf '      %-28s %s -> %s   (command-line tool)\n' "$NAME" "$FROM" "$TO"
+      inv brew-formula "$NAME" "$FROM" "$TO" "$NAME"
+    done
+    printf '%s\n' "$ROWS_C" | while IFS="$(printf '\t')" read -r NAME FROM TO; do
+      [ -n "$NAME" ] || continue
+      printf '      %-28s %s -> %s   (app)\n' "$NAME" "$FROM" "$TO"
+      inv brew-cask "$NAME" "$FROM" "$TO" "$NAME"
+    done
     $BREW_FRESH || note "  (the index could not be refreshed, so there may be more)"
     if $UPGRADE && confirm "Upgrade these Homebrew packages?"; then
       brew upgrade
@@ -288,6 +347,9 @@ if command -v mas >/dev/null 2>&1; then
   elif [ "$NM" -gt 0 ]; then
     upd "$NM App Store apps have updates available"
     printf '%s\n' "$MAS_OUT" | sed 's/^/      /'
+    printf '%s\n' "$MAS_OUT" | mas_rows | while IFS="$(printf '\t')" read -r NAME FROM TO; do
+      inv app-store "$NAME" "$FROM" "$TO" ""
+    done
     if $UPGRADE && confirm "Upgrade these App Store apps?"; then mas upgrade; fi
   else
     pass "App Store apps are up to date"
@@ -347,6 +409,18 @@ else
     CMP=$(printf '%s' "$PAIRS" | catalog_compare "$CATALOG" "$INSTALLED_CASKS")
     NCMP=$(printf '%s' "$CMP" | grep -c .)
     BEHIND=$(printf '%s\n' "$CMP" | awk -F'\t' '$5 == "behind"')
+    # Every app the catalog knows goes in the inventory, behind or not; every
+    # app it does not know goes in as "check it yourself" — never as current.
+    printf '%s\n' "$CMP" | while IFS="$(printf '\t')" read -r APPN CASK FROM TO STATE; do
+      [ -n "$APPN" ] || continue
+      case "$STATE" in behind) K=app-behind ;; current) K=app-current ;; *) K=app-unchecked ;; esac
+      inv "$K" "${APPN%.app}" "$FROM" "$TO" "$CASK"
+    done
+    printf '%s' "$PAIRS" | while IFS="$(printf '\t')" read -r APPN FROM; do
+      [ -n "$APPN" ] || continue
+      printf '%s\n' "$CMP" | awk -F'\t' -v a="$APPN" '$1 == a {f = 1} END {exit !f}' && continue
+      inv app-unchecked "${APPN%.app}" "$FROM" "" ""
+    done
     NB=$(printf '%s' "$BEHIND" | grep -c .)
     echo
     if [ "$NB" -gt 0 ]; then
@@ -356,8 +430,15 @@ else
       pass "The $NCMP self-updating apps Homebrew's catalog knows are current"
     fi
     [ "$NCMP" -gt 0 ] && note "Compared $NCMP of ${#UNMANAGED[@]} against Homebrew's catalog; the rest are not in it."
+    NUN=$(( ${#UNMANAGED[@]} - NCMP ))
+    [ "$NUN" -gt 0 ] && info "$NUN self-updating apps are not in Homebrew's catalog, so their updates could not be checked"
   else
     note "(Homebrew's catalog or python3 is not available, so versions were not compared.)"
+    # Said in the report too: silence here read as "nothing to update".
+    [ ${#UNMANAGED[@]} -gt 0 ] && info "${#UNMANAGED[@]} self-updating apps were not compared, because Homebrew's catalog or python3 is not available"
+    printf '%s' "$PAIRS" | while IFS="$(printf '\t')" read -r APPN FROM; do
+      [ -n "$APPN" ] && inv app-unchecked "${APPN%.app}" "$FROM" "" ""
+    done
   fi
   echo
   note "Many have Homebrew casks; to hand one over:  brew install --cask --adopt <name>"

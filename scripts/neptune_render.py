@@ -108,6 +108,21 @@ def load_listing(path):
     return numbers
 
 
+INVENTORY_KINDS = ("apple", "brew-formula", "brew-cask", "app-store", "app-behind",
+                   "app-current", "app-unchecked")
+
+
+def load_inventory(path):
+    """kind<TAB>name<TAB>installed<TAB>latest<TAB>hint, written by
+    check_updates.sh: every app with an update, and how to get it."""
+    out = []
+    for line in _lines(path):
+        f = line.split("\t")
+        if len(f) >= 5 and f[0] in INVENTORY_KINDS and f[1]:
+            out.append({"kind": f[0], "name": f[1], "installed": f[2], "latest": f[3], "hint": f[4]})
+    return out
+
+
 def load_seen(path):
     seen = {}
     for line in _lines(path):
@@ -598,6 +613,13 @@ REMEDIATION = [
      "software (plug-in managers, iLok-protected tools) on its vendor's own updater.",
      lambda t: [("brew outdated", "look", "Lists what would be upgraded. Changes nothing."),
                 ("brew upgrade", "software", "Upgrades Homebrew formulae and casks.")]),
+    (("app-updates:info",), r"self-updating apps (were not compared|are not in Homebrew)",
+     "Some apps keep themselves up to date, and Neptune checks them against Homebrew's "
+     "catalog of the latest versions. These ones it could not check: the catalog does not "
+     "know them, or it was not available on this run.",
+     "Nothing is wrong. Now and then, open each one and use its Check for Updates. The "
+     "report's \"Updates, app by app\" section lists them by name.",
+     _none),
     (("app-updates",), r"self-updating apps are behind",
      "Apps that update themselves are behind the version Homebrew's catalog lists. "
      "They are not managed by Homebrew, so nothing updates them unless you open them.",
@@ -999,6 +1021,7 @@ def build_report(args):
     seen = load_seen(args.seen)
     notes = load_quirk_notes(args.quirks)
     prev, runs_on_record = load_previous_run(args.history)
+    software = [dict(s, name=clean(s["name"])) for s in load_inventory(getattr(args, "inventory", ""))]
 
     findings, checks = [], []
     for i, r in enumerate(records):
@@ -1077,6 +1100,7 @@ def build_report(args):
         "checks_passed": checks,
         "previous_run": previous,
         "runs_on_record": runs_on_record,
+        "software": software,
         # Underscored keys are for rendering only and never reach the JSON.
         "_records": records,
         "_brief_name": getattr(args, "brief_name", ""),
@@ -1321,6 +1345,8 @@ table.flags{width:100%;border-collapse:collapse;font-size:13px;margin:4px 0 10px
 table.flags td{padding:6px 8px;border-top:1px solid var(--line);vertical-align:top}
 table.flags td:first-child{font-family:ui-monospace,"SF Mono",Menlo,monospace;width:40%;overflow-wrap:anywhere}
 .undo{font-size:13px;color:var(--muted);margin:8px 0 0}.undo b{color:var(--ink)}
+.panel.soft{padding:4px 20px 14px;margin-bottom:12px}
+.panel.soft table.flags td:first-child{font-family:inherit;font-weight:600;width:45%}
 .vnote{background:var(--code);border-left:3px solid var(--accent);padding:10px 12px;border-radius:0 8px 8px 0;margin:12px 0 0;font-size:14px}
 .box{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px;box-shadow:var(--shadow)}
 .box p{margin:0 0 10px}.box ol{margin:8px 0 0;padding-left:20px}.box li{margin:0 0 8px}
@@ -1536,7 +1562,10 @@ def render_html(report):
                ("<p class=\"undo\"><b>Undo:</b> %s</p>" % e(pl["undo"])) if pl["undo"] else ""))
     add("</div></section>")
 
-    # 5. The details, with the explanation ladder
+    # 5. Updates, app by app
+    add(software_html(e, report.get("software") or []))
+
+    # 6. The details, with the explanation ladder
     open_f = [f for f in findings if not f["acknowledged"] and f["severity"] in ("attention", "unknown", "notice")]
     if open_f:
         add("<section><h2>The details</h2>"
@@ -1556,7 +1585,7 @@ def render_html(report):
                 add(_finding_html(e, f, is_open))
         add("</section>")
 
-    # 6. Second opinion
+    # 7. Second opinion
     reasons = ai_reasons(report)
     brief = report.get("_brief_name") or "neptune_ai_brief_<date>.md"
     add("<section><h2>Get a second opinion</h2><div class=\"box\">")
@@ -1580,7 +1609,7 @@ def render_html(report):
         "</div></section>"
         % (e(brief), e(report.get("_json_name") or "neptune_findings_<date>.json"), meta["schema"]))
 
-    # 7. Quiet sections
+    # 8. Quiet sections
     add("<section>")
     acked = [f for f in findings if f["acknowledged"]]
     add("<details class=\"quiet\"><summary>Kept on purpose (%d)</summary>" % len(acked))
@@ -1632,6 +1661,80 @@ def render_html(report):
         % (e(meta["version"] or "?"), meta["schema"], e(meta["generated"]),
            " &middot; sanitized" if meta["sanitized"] else ""))
     return "\n".join(W) + "\n"
+
+
+# ---------------------------------------------------------------------------
+# Updates, app by app — from check_updates.sh's inventory. Every outdated
+# thing lands in exactly one group, and each group says how it gets updated:
+# Homebrew, Apple, the App Store, or the app itself / its developer. An app
+# Neptune could not compare is listed as "check it yourself", never as current.
+# ---------------------------------------------------------------------------
+SOFTWARE_GROUPS = (
+    (("brew-formula", "brew-cask"), "Homebrew can update these",
+     "One command updates them all, and asks before it starts. Licence-managed "
+     "software is better left to its own updater.",
+     "./check_updates.sh --upgrade", "software", "brew upgrade {name}"),
+    (("apple",), "Apple updates",
+     "System Settings > General > Software Update, or the same command. It asks "
+     "before each one and never starts a major macOS upgrade.",
+     "./check_updates.sh --upgrade", "software", ""),
+    (("app-store",), "Mac App Store",
+     "Open the App Store and choose Updates, or update them all from Terminal.",
+     "mas upgrade", "software", ""),
+    (("app-behind",), "Update these from the app itself",
+     "Open each app and use Check for Updates (usually in the app's menu), or "
+     "download the latest version from its developer. To let Homebrew keep one "
+     "current from now on, adopt it — but not licence-managed software, whose "
+     "activation can break.",
+     "", "", "brew install --cask --adopt {hint}"),
+)
+
+
+def software_html(e, software):
+    if not software:
+        return ""
+    out = ["<section><h2>Updates, app by app</h2><p class=\"sub\">What has a newer version, "
+           "and the way to get it. Nothing here installs anything until you run it.</p>"]
+    add = out.append
+    any_outdated = False
+    for kinds, title, how, cmd, kind, per_item in SOFTWARE_GROUPS:
+        rows = [s for s in software if s["kind"] in kinds]
+        if not rows:
+            continue
+        any_outdated = True
+        add("<div class=\"panel soft\"><h3 class=\"grp\">%s <span class=\"faint\">(%d)</span></h3>"
+            "<p class=\"eff\">%s</p><table class=\"flags\">" % (e(title), len(rows), e(how)))
+        for s in sorted(rows, key=lambda s: s["name"].lower()):
+            ver = ("%s &rarr; %s" % (e(s["installed"] or "?"), e(s["latest"]))) if s["latest"] else e(s["installed"])
+            item = per_item.format(name=s["name"], hint=s["hint"]) if per_item and (s["hint"] or "{name}" in per_item) else ""
+            add("<tr><td>%s</td><td>%s%s</td></tr>"
+                % (e(s["name"]), ver,
+                   ("<div class=\"r3\"><code>%s</code></div>" % e(item)) if item else ""))
+        add("</table>")
+        if cmd:
+            add(_cmd_html(e, cmd, kind, flags=False))   # explained part by part under Recommended commands
+        add("</div>")
+    current = [s for s in software if s["kind"] == "app-current"]
+    unchecked = [s for s in software if s["kind"] == "app-unchecked"]
+    if not any_outdated:
+        add("<p class=\"sub\">Everything Neptune could compare is up to date.</p>")
+    if current:
+        add("<p class=\"sub\">%s</p>" % ("1 app that updates itself is on the latest version Homebrew knows of."
+                                          if len(current) == 1 else
+                                          "%d apps that update themselves are on the latest version Homebrew knows of."
+                                          % len(current)))
+    if unchecked:
+        add("<details class=\"quiet\"><summary>%s Neptune couldn't compare &mdash; check these "
+            "yourself</summary><p class=\"sub\">Homebrew's catalog doesn't know them, so there is "
+            "no version to compare against. Use each app's Check for Updates, or its developer's "
+            "website.</p><ul class=\"passlist\">"
+            % plural(len(unchecked), "app", "apps"))
+        for s in sorted(unchecked, key=lambda s: s["name"].lower()):
+            add("<li>%s%s</li>" % (e(s["name"]), (" <span class=\"faint\">%s</span>" % e(s["installed"]))
+                                   if s["installed"] and s["installed"] != "?" else ""))
+        add("</ul></details>")
+    add("</section>")
+    return "".join(out)
 
 
 def _finding_html(e, f, is_open):
@@ -1757,6 +1860,21 @@ def render_brief(report):
         for f in acked:
             add("- " + f["headline"])
         add("")
+    software = report.get("software") or []
+    if software:
+        names = {"apple": "Apple", "brew-formula": "Homebrew (command-line)",
+                 "brew-cask": "Homebrew (app)", "app-store": "App Store",
+                 "app-behind": "updates itself (behind Homebrew's catalog)"}
+        rows = [s for s in software if s["kind"] in names]
+        unchecked = [s["name"] for s in software if s["kind"] == "app-unchecked"]
+        if rows or unchecked:
+            add("## Software with updates (%d)\n" % len(rows))
+            for s in rows:
+                add("- %s: %s%s" % (names[s["kind"]], s["name"],
+                                    (" %s -> %s" % (s["installed"] or "?", s["latest"])) if s["latest"] else ""))
+            if unchecked:
+                add("- Not comparable (no catalog entry), so their status is unknown: " + ", ".join(unchecked))
+            add("")
     add("## Passed (%d checks)\n" % len(report["checks_passed"]))
     for cat in CATEGORIES:
         mine = [p["title"] for p in report["checks_passed"] if p["category"] == cat]
@@ -1791,6 +1909,19 @@ def json_to_records(path):
     return records, allow
 
 
+def software_from_json(path):
+    """The inventory rows a saved --json carried, so a replay keeps them."""
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        data = json.load(fh)
+    rows = []
+    for s in data.get("software", []) or []:
+        f = [str(s.get(k, "")).replace("\t", " ").replace("\n", " ")
+             for k in ("kind", "name", "installed", "latest", "hint")]
+        if f[0] in INVENTORY_KINDS and f[1]:
+            rows.append("\t".join(f))
+    return rows
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--format", choices=("json", "html", "brief"))
@@ -1801,6 +1932,7 @@ def main(argv=None):
     ap.add_argument("--history", default=""); ap.add_argument("--seen", default="")
     ap.add_argument("--replay-source", default="")
     ap.add_argument("--brief-name", default=""); ap.add_argument("--json-name", default="")
+    ap.add_argument("--inventory", default=""); ap.add_argument("--inventory-out")
     ap.add_argument("--sanitize", action="store_true")
     ap.add_argument("--json-to-records"); ap.add_argument("--records-out"); ap.add_argument("--allow-out")
     args = ap.parse_args(argv)
@@ -1815,6 +1947,10 @@ def main(argv=None):
             fh.write("\n".join(records) + ("\n" if records else ""))
         with open(args.allow_out, "w", encoding="utf-8") as fh:
             fh.write("\n".join(allow) + ("\n" if allow else ""))
+        if args.inventory_out:
+            with open(args.inventory_out, "w", encoding="utf-8") as fh:
+                for s in software_from_json(args.json_to_records):
+                    fh.write(s + "\n")
         return 0
 
     if not (args.format and args.scored and args.scores):
