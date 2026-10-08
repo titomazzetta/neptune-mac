@@ -23,6 +23,10 @@ explains each in full — symptom, root cause, fix, and what was learned.
   silent. The terminal shows versions too: `wget 1.21.3 -> 1.21.4`.
 
 ### Fixed
+- **A `mas` that could not run read as "App Store apps are up to date".** On a
+  laptop with a leftover Intel Homebrew and no Rosetta, `/usr/local/bin/mas`
+  exited 126 with no output, and no output was taken to mean no updates. It is
+  now "could not check", with the reason.
 - **"Install the Command Line Tools" on a Mac that had them.** On the first
   laptop run, PATH offered a leftover `/usr/local/bin/python3` that could not
   execute (exit 126), ahead of a working Apple `/usr/bin/python3`. Neptune

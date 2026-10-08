@@ -344,6 +344,10 @@ if command -v mas >/dev/null 2>&1; then
   NM=$(printf '%s' "$MAS_OUT" | grep -c .)
   if [ "$MAS_RC" -eq 143 ]; then
     unknown "mas outdated did not finish within a minute"
+  elif [ "$MAS_RC" -eq 126 ] || [ "$MAS_RC" -eq 127 ] || { [ "$MAS_RC" -ne 0 ] && [ "$NM" -eq 0 ]; }; then
+    # A mas that cannot start prints nothing — which used to read as "no
+    # updates" (found on a laptop with a leftover Intel Homebrew and no Rosetta).
+    unknown "mas is installed at $(command -v mas) but could not run (exit $MAS_RC$([ "$MAS_RC" -eq 126 ] && echo ': often an Intel-only build on Apple silicon without Rosetta')), so App Store updates were not checked"
   elif [ "$NM" -gt 0 ]; then
     upd "$NM App Store apps have updates available"
     printf '%s\n' "$MAS_OUT" | sed 's/^/      /'
