@@ -647,6 +647,7 @@ render() {
     ${RENDER_HISTORY:+--history "$RENDER_HISTORY"} \
     ${RENDER_SEEN:+--seen "$RENDER_SEEN"} \
     ${RENDER_REPLAY:+--replay-source "$RENDER_REPLAY"} \
+    --inventory "$INVENTORY" \
     ${BRIEF_NAME:+--brief-name "$BRIEF_NAME"} ${JSON_NAME:+--json-name "$JSON_NAME"} > "$OUTF"
 }
 
@@ -660,8 +661,9 @@ if [ -n "$REPLAY" ]; then
   OUT_DIR="${OUT_DIR:-.}"
   mkdir -p "$OUT_DIR" || exit 64
   RALLOW="$TMP/allow"; : > "$RALLOW"
+  INVENTORY="$TMP/inventory.tsv"; : > "$INVENTORY"
   case "$REPLAY" in
-    *.json) PYTHONUTF8=1 "$NEP_PY" "$RENDERER" --json-to-records "$REPLAY" \
+    *.json) PYTHONUTF8=1 "$NEP_PY" "$RENDERER" --json-to-records "$REPLAY" --inventory-out "$INVENTORY" \
               --records-out "$FINDINGS" --allow-out "$RALLOW" || exit 64 ;;
     *)      cp "$REPLAY" "$FINDINGS" ;;
   esac
@@ -733,6 +735,10 @@ export NEPTUNE_SUITE=1
 # Scans that save their own report (redflag) put it beside this one, so --out
 # means every file lands in one place rather than half of them on the Desktop.
 export NEPTUNE_REPORT_DIR="$OUT_DIR"
+# check_updates.sh lists every app with an update, or that it could not check,
+# here: the reports turn it into "what to update, and how", app by app.
+INVENTORY="$TMP/inventory.tsv"; : > "$INVENTORY"
+export NEPTUNE_INVENTORY="$INVENTORY"
 
 strip_ansi() { sed -E $'s/\x1b\\[[0-9;]*[a-zA-Z]//g; s/\x1b\\(B//g'; }
 

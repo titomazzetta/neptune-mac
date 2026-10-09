@@ -95,6 +95,8 @@ macos-upgrade	.	 — .*$	^.*available: 	{s} is available	Upgrade when the apps y
 brew-outdated	^Homebrew has updates for	-	^Homebrew has updates for 	Homebrew has updates for {s}	-
 brew-outdated	have updates	 have updates available$	Homebrew 	{s} have Homebrew updates	-
 brew-outdated	.	-	-	Couldn't refresh Homebrew's package list	-
+app-updates	were not compared	 self-updating apps were not compared.*$	-	{s} apps that update themselves weren't compared	Homebrew's catalog or python3 wasn't available.
+app-updates	not in Homebrew	 self-updating apps are not in Homebrew.*$	-	{s} apps that update themselves couldn't be checked	Homebrew's catalog doesn't know them; the report lists them.
 app-updates	.	-	^.*catalog: 	Behind on updates: {s}	They update themselves; open each one, or let Homebrew adopt it.
 mas-outdated	have updates	 App Store apps.*$	-	{s} App Store apps have updates	-
 mas-outdated	.	-	-	Couldn't check the App Store for updates	-

@@ -111,7 +111,7 @@ CLAUDE.md        this file
 | `audit_system.sh` | Resources, persistence, disk | no |
 | `network_check.sh` | NAT, DNS, latency, connections | no |
 | `netcheck_plus.sh` | Deep network: Wi-Fi quality, LAN census, router checklist (standalone, not in the suite) | no |
-| `check_updates.sh` | macOS + brew + App Store updates; self-updating apps vs Homebrew's catalog | only with `--upgrade`, asking per source; never a major upgrade |
+| `check_updates.sh` | macOS + brew + App Store updates; self-updating apps vs Homebrew's catalog; writes the per-app inventory (`$NEPTUNE_INVENTORY`) the reports list app by app | only with `--upgrade`, asking per source; never a major upgrade |
 | `fix.sh` | Guided fixer behind `neptune.sh --fix`: per-finding fix, exact command, y/N; k/u/skip for software you may have chosen; `--only` queue | settings/updates the user confirms one at a time; `~/.neptune/allow` on k; deletes nothing itself; logs to `~/.neptune/fix-log.tsv` |
 | `clean_caches.sh` | Cache inventory; empties the ones you pick | YES — `--apply`, pick, type `yes`; never as root |
 | `uninstall.sh` | Guided app removal | YES — confirmed; nothing with `--dry-run` |
