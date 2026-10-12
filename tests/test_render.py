@@ -436,6 +436,142 @@ class Phrasebook(unittest.TestCase):
                 self.assertEqual(f["headline"], phrase_py(self.rows, f["check"], f["title"]), f["title"])
 
 
+class Enrichment(unittest.TestCase):
+    """Optional deep inspection (yara/clamav). A signature hit is a scored
+    attention finding; a tool that could not read a file is an unknown, not a
+    pass; and the one network touch lives only in deep_update_rules."""
+
+    def setUp(self):
+        self.rows = load_phrases()
+
+    def _replay(self, records):
+        out = tempfile.mkdtemp()
+        try:
+            fx = os.path.join(out, "f.txt")
+            with open(fx, "w", encoding="utf-8") as fh:
+                fh.write(records)
+            run(["bash", "scripts/neptune.sh", "--replay", fx, "--json", "--out", out],
+                env={"HOME": out})
+            with open(os.path.join(out, "neptune_findings_replay.json"), encoding="utf-8") as fh:
+                return json.load(fh)
+        finally:
+            shutil.rmtree(out, ignore_errors=True)
+
+    def test_a_signature_hit_reads_and_scores_as_attention(self):
+        rep = self._replay(
+            "attention|security|redflag|malware-signature|"
+            "YARA signature match on a flagged file: OSX_Backdoor (/Library/Foo/bar)\n")
+        f = rep["findings"][0]
+        self.assertEqual(f["severity"], "attention")
+        self.assertEqual(f["headline"],
+                         "A flagged file matches a known-malware signature: OSX_Backdoor")
+        self.assertEqual(f["headline"], phrase_py(self.rows, f["check"], f["title"]))
+        # The advice says verify, not wipe; and it points a command at the file.
+        adv = f["advice"]
+        self.assertIn("verify", (adv["means"] + adv["do"]).lower())
+        self.assertTrue(any("/Library/Foo/bar" in c["command"] for c in adv["commands"]),
+                        adv["commands"])
+
+    def test_a_tool_that_could_not_read_a_file_is_unknown_not_pass(self):
+        rep = self._replay(
+            "unknown|security|redflag|malware-signature|"
+            "ClamAV could not inspect /Library/Foo/bar\n")
+        f = rep["findings"][0]
+        self.assertEqual(f["severity"], "unknown")
+        self.assertEqual(f["headline"], phrase_py(self.rows, f["check"], f["title"]))
+        # An unknown is advised as could-not-check, never as the failure state.
+        self.assertNotIn("matches a known-malware", f["advice"].get("means", ""))
+
+    FLAGGED = {"check": "persistence-launchd", "severity": "attention", "acknowledged": False,
+               "n": 1, "headline": "h",
+               "title": "UNSIGNED persistence: com.x runs /Library/Foo/bar (/Library/LaunchAgents/com.x.plist)"}
+
+    def _dig(self, deep, findings=None):
+        report = {"findings": findings if findings is not None else [dict(self.FLAGGED)],
+                  "deep_inspection": deep}
+        cmds = [p["command"] for p in R.playbook(report)]
+        return [c for c in cmds if "--inspect" in c or c.startswith("brew install")]
+
+    def test_dig_deeper_fits_what_this_mac_has(self):
+        # Unknown (a replayed findings file): --inspect, which prints its own install hint.
+        self.assertEqual(self._dig(None), ["./neptune.sh --inspect"])
+        # Nothing installed: install first, then check — in that order.
+        self.assertEqual(self._dig({"ready": [], "installed": []}),
+                         ["brew install clamav", "./neptune.sh --inspect --update-rules"])
+        # Installed but not ready (no signatures, or no YARA rules): never "install".
+        for inst in (["clamscan"], ["yara"]):
+            self.assertEqual(self._dig({"ready": [], "installed": inst}),
+                             ["./neptune.sh --inspect --update-rules"], inst)
+        # Already ran this scan: offer a re-check with fresh signatures.
+        plays = R.playbook({"findings": [dict(self.FLAGGED)],
+                            "deep_inspection": {"ready": ["clamscan"], "installed": ["clamscan"]}})
+        recheck = [p for p in plays if "--inspect" in p["command"]]
+        self.assertEqual(len(recheck), 1)
+        self.assertIn("ClamAV already checked", recheck[0]["short"])
+
+    def test_dig_deeper_only_when_something_was_flagged(self):
+        firewall = {"check": "firewall", "severity": "attention", "acknowledged": False, "n": 1,
+                    "title": "Application firewall is OFF", "headline": "h"}
+        self.assertEqual(self._dig({"ready": [], "installed": []}, [firewall]), [])
+        kept = dict(self.FLAGGED, acknowledged=True)
+        self.assertEqual(self._dig({"ready": [], "installed": []}, [kept]), [],
+                         "an item you kept is not a reason to install a scanner")
+
+    def test_dig_deeper_commands_are_explained_and_never_reach_out_themselves(self):
+        for deep in (None, {"ready": [], "installed": []}, {"ready": [], "installed": ["yara"]},
+                     {"ready": ["yara"], "installed": ["yara"]}):
+            for p in R.playbook({"findings": [dict(self.FLAGGED)], "deep_inspection": deep}):
+                self.assertTrue(R.explain_command(p["command"]), p["command"])
+                self.assertIn(p["kind"], R.KINDS)
+                self.assertNotRegex(p["short"] + p["detail"] + p["undo"], r"https?://")
+
+    def test_scanner_state_survives_a_json_replay(self):
+        out = tempfile.mkdtemp()
+        try:
+            fx = os.path.join(out, "f.txt")
+            with open(fx, "w", encoding="utf-8") as fh:
+                fh.write("attention|security|redflag|persistence-launchd|%s\n" % self.FLAGGED["title"])
+            run(["bash", "scripts/neptune.sh", "--replay", fx, "--json", "--out", out], env={"HOME": out})
+            js = os.path.join(out, "neptune_findings_replay.json")
+            with open(js, encoding="utf-8") as fh:
+                data = json.load(fh)
+            self.assertIsNone(data["deep_inspection"], "a findings file records no scanner state")
+            data["deep_inspection"] = {"ready": [], "installed": ["clamscan"]}
+            saved = os.path.join(out, "saved.json")
+            with open(saved, "w", encoding="utf-8") as fh:
+                json.dump(data, fh)
+            os.remove(js)
+            run(["bash", "scripts/neptune.sh", "--replay", saved, "--html", "--json", "--out", out],
+                env={"HOME": out})
+            with open(js, encoding="utf-8") as fh:
+                again = json.load(fh)
+            with open(os.path.join(out, "neptune_report_replay.html"), encoding="utf-8") as fh:
+                html = fh.read()
+        finally:
+            shutil.rmtree(out, ignore_errors=True)
+        self.assertEqual(again["deep_inspection"], {"ready": [], "installed": ["clamscan"]})
+        self.assertIn("Download ClamAV&#x27;s signatures", html)
+        self.assertNotIn("brew install clamav", html)
+
+    def test_only_update_rules_touches_the_network(self):
+        """The base scan and the enrichment pass stay network-silent: the only
+        references to curl/wget/freshclam/http live inside deep_update_rules, and
+        redflag's enrichment pass has none at all."""
+        net = re.compile(r"\b(curl|wget|freshclam)\b|https?://")
+        with open(os.path.join(SCRIPTS, "inspect_deep.sh"), encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+        start = next(i for i, l in enumerate(lines) if l.startswith("deep_update_rules()"))
+        end = next(i for i in range(start + 1, len(lines)) if lines[i] == "}")
+        offenders = [(i + 1, l) for i, l in enumerate(lines)
+                     if net.search(l) and not (start <= i <= end)
+                     and not l.lstrip().startswith("#")]
+        self.assertEqual(offenders, [], "network outside deep_update_rules")
+        with open(os.path.join(SCRIPTS, "redflag_scan.sh"), encoding="utf-8") as fh:
+            rf = [(i + 1, l) for i, l in enumerate(fh.read().splitlines())
+                  if net.search(l) and not l.lstrip().startswith("#")]
+        self.assertEqual(rf, [], "redflag_scan.sh must never touch the network")
+
+
 class Ladder(unittest.TestCase):
     """The explanation ladder: every rung exists for every check, and every
     command the report can show has every part of it explained."""

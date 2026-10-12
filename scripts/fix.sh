@@ -160,6 +160,16 @@ plan_for() {
       GUIDE="Run brew doctor and follow each warning's own instructions." ;;
     cgnat)
       GUIDE="Nothing to fix on this Mac; ask your ISP for a public IP only if you need inbound connections." ;;
+    malware-signature)
+      # A signature match is never something to "keep" as known-good, and there is
+      # no safe one-command fix: you verify, then isolate or remove deliberately.
+      if [ -n "$APP" ]; then
+        KIND=run; ACTION="uninstall:$APP"; TAG="Neptune command"
+        LABEL="Remove $APP and everything it installed (shows the full list, asks first) — a signature match is a strong reason to, once you have confirmed it"
+        CMD="./uninstall.sh \"$APP\""
+      else
+        GUIDE="This file was already flagged and matches a known-malware signature. Do not delete it blindly: note its path, and if you are unsure, take the Mac off the network. Isolate it — move the launch item that starts it to the Trash (reversible) and keep the file itself for analysis. A signature match is a strong lead, not proof; confirm before you wipe anything."
+      fi ;;
     *)
       GUIDE="Re-run Neptune. If this keeps appearing, run the scan named in the finding on its own to see why it could not check." ;;
   esac

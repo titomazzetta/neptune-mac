@@ -453,6 +453,17 @@ REMEDIATION = [
      "receiving network traffic right now.",
      "Match it to software you installed. If you cannot, that is the finding to chase first.",
      _codesign),
+    (("malware-signature",), r"signature match on a flagged file",
+     "A file that was already flagged — it starts at login, listens, or runs from an "
+     "odd place — also matches a known-malware signature in your YARA or ClamAV rules. "
+     "That is strong corroboration, not proof: signatures produce false positives, and "
+     "a match on a legitimate vendor binary can still be a bad or over-broad rule.",
+     "Treat it as the thing to verify first, not a reason to wipe. Identify what the "
+     "file is and what starts it. If it belongs to software you installed and the rule "
+     "is a known false positive, you can keep it — but confirm that first. If you cannot "
+     "place it, isolate it: move its launch item to the Trash (reversible) and keep the "
+     "file itself for analysis before deleting anything.",
+     lambda t: _codesign(t) + _plist(t) + _uninstall(t)),
     (("baseline-diff:info",), r"^Baseline (created|re-established|format changed)",
      "Neptune set up or replaced its change-detection baseline on this run, so there "
      "was nothing to compare against yet.",
@@ -749,6 +760,7 @@ SHORT = {
     "process-root": "A program running with full admin rights isn't signed by its maker.",
     "listeners": "Some programs are waiting for connections from other machines.",
     "network-signing": "A program that's online isn't signed by its maker.",
+    "malware-signature": "A file that was already flagged also matches a known-malware signature — a strong lead to check, not proof on its own.",
     "baseline-diff": "Something appeared since your last known-good snapshot.",
     "baseline-gone": "Some things from your last snapshot are no longer there.",
     "proxy": "Your web traffic is being routed through a proxy.",
@@ -881,6 +893,8 @@ FLAGS = {
     ("neptune.sh", "--fix"): "go through your last run's items one at a time; nothing changes without a y",
     ("neptune.sh", "--only"): "just these item numbers, in this order",
     ("neptune.sh", "--acknowledge"): "mark these items as known; they stay listed and stop costing points",
+    ("neptune.sh", "--inspect"): "check only the files the last run flagged against malware signatures, if a scanner is installed; reads, changes nothing",
+    ("neptune.sh", "--update-rules"): "first download fresh signatures from the internet, naming each source before it goes",
 }
 
 
@@ -1101,6 +1115,7 @@ def build_report(args):
         "previous_run": previous,
         "runs_on_record": runs_on_record,
         "software": software,
+        "deep_inspection": deep_state(args),
         # Underscored keys are for rendering only and never reach the JSON.
         "_records": records,
         "_brief_name": getattr(args, "brief_name", ""),
@@ -1206,6 +1221,7 @@ def playbook(report):
             "Lists every program waiting for incoming connections, with its port. Reads only.",
             "Ports on 127.0.0.1 are only reachable from this Mac. Ports on * or 0.0.0.0 are "
             "reachable from your network, which is what the firewall is for.")
+    out.extend(dig_deeper(report, open_f))
     keepable = [f["n"] for f in open_f if "n" in f and f["check"] in KEEP_CHECKS]
     if keepable:
         add("Keep something you recognize", "./neptune.sh --acknowledge %d" % keepable[0], "neptune",
@@ -1216,6 +1232,82 @@ def playbook(report):
         "Runs the scan again and compares it with this report.",
         "Every run is kept in ~/.neptune/history.tsv, so the scores show what moved.")
     return out
+
+
+# Dig deeper: the optional malware-signature check (scripts/inspect_deep.sh),
+# offered only when something was flagged that a scanner could speak to — the
+# checks whose files redflag_scan.sh hands to it. What to suggest depends on
+# what THIS Mac had (deep_inspection, from neptune.sh): nothing installed, a
+# scanner installed but without signatures or rules, or one that already ran.
+# Neptune only ever prints these commands; it never installs or downloads.
+DEEP_CHECKS = ("persistence-launchd", "privileged-helpers", "process-hidden", "process-root",
+               "listeners", "malware-signature")
+DEEP_NAMES = {"yara": "YARA", "clamscan": "ClamAV"}
+DEEP_NET = ("Updating downloads from the internet: ClamAV's own updater, and YARA rules only "
+            "from the address you set in NEPTUNE_YARA_URL. It names each source before it goes; "
+            "the check itself downloads nothing. A match is a lead to verify first, not proof; "
+            "no match is reassurance, not a clearance.")
+DEEP_UNDO = ("Neptune saves only YARA rules you pointed it at, in ~/.neptune/yara: delete that "
+             "folder to remove them. ClamAV's signatures live with ClamAV; brew uninstall clamav "
+             "removes both.")
+
+
+def dig_deeper(report, open_f):
+    files = [f for f in open_f if f["check"] in DEEP_CHECKS]
+    if not files:
+        return []
+    what = plural(len(files), "flagged item", "flagged items")
+    deep = report.get("deep_inspection")
+    plays = []
+
+    def add(title, command, kind, short, detail, undo=""):
+        plays.append({"title": title, "command": command, "kind": kind, "short": short,
+                      "detail": detail, "undo": undo})
+
+    if deep is None:
+        add("Dig deeper on the %s" % what, "./neptune.sh --inspect", "neptune",
+            "Checks just the flagged files against known-malware signatures, if YARA or ClamAV "
+            "is installed. If neither is, it prints the one command that installs one, and stops.",
+            "This report doesn't record whether a scanner was installed when it was made. Only "
+            "the flagged files are read, never the whole disk, and this command installs and "
+            "downloads nothing.")
+        return plays
+    ready = [DEEP_NAMES.get(t, t) for t in deep.get("ready") or []]
+    installed = deep.get("installed") or []
+    if ready:
+        add("Re-check the %s with fresh signatures" % what, "./neptune.sh --inspect --update-rules",
+            "neptune",
+            "%s already checked these files during this scan. This updates the signatures, then "
+            "checks the same files again, in seconds rather than a full scan." % " and ".join(ready),
+            DEEP_NET, DEEP_UNDO)
+    elif "clamscan" in installed:
+        add("Download ClamAV's signatures", "./neptune.sh --inspect --update-rules", "neptune",
+            "ClamAV is installed but has no signatures yet, so it couldn't check anything on "
+            "this run. This downloads them, then checks the %s." % what,
+            "The first time, Homebrew's ClamAV needs a config file; the command shows the two "
+            "lines that create it and asks before running them, so nothing outside Neptune "
+            "changes without your y. "
+            + DEEP_NET, DEEP_UNDO)
+    elif "yara" in installed:
+        add("Give YARA rules to check with", "./neptune.sh --inspect --update-rules", "neptune",
+            "YARA is installed but has no rules, so it couldn't check anything on this run. "
+            "Neptune won't pick a rule source for you: set NEPTUNE_YARA_URL to a ruleset you "
+            "trust, then run this.",
+            "It downloads only from the address you set, checks it against NEPTUNE_YARA_SHA256 "
+            "if you set that too, saves it in ~/.neptune/yara, then checks the %s. " % what
+            + DEEP_NET, DEEP_UNDO)
+    else:
+        add("Dig deeper on the %s" % what, "brew install clamav", "software",
+            "Installs ClamAV, a free, open-source malware scanner. Neptune then checks only the "
+            "files it flagged, never the whole disk, and nothing stays running.",
+            "Neptune never installs anything itself; this is a command for you to run. ClamAV "
+            "comes first because it brings its own signatures. YARA (brew install yara) works "
+            "too, with rules you choose. Your scores never depend on having either.",
+            "brew uninstall clamav")
+        add("Then check the flagged files", "./neptune.sh --inspect --update-rules", "neptune",
+            "Downloads ClamAV's signatures, then checks just the %s against them." % what,
+            DEEP_NET, DEEP_UNDO)
+    return plays
 
 
 def ai_reasons(report):
@@ -1309,8 +1401,8 @@ h3.grp{font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:var(--
 .gain{font-size:12px;color:var(--good);white-space:nowrap;text-align:right}
 .gain.none{color:var(--faint)}
 .queue{margin:12px 0 0;font-size:14px;color:var(--muted)}
-.cmd{display:flex;justify-content:space-between;align-items:center;gap:12px;background:var(--code);border-radius:10px;padding:10px 14px;margin:8px 0}
-.cmd code{overflow-wrap:anywhere;min-width:0}
+.cmd{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:8px 12px;background:var(--code);border-radius:10px;padding:10px 14px;margin:8px 0}
+.cmd code{overflow-wrap:anywhere;min-width:0;flex:1 1 12em}
 .kind{font-size:11px;text-transform:uppercase;letter-spacing:.06em;padding:2px 8px;border-radius:999px;white-space:nowrap}
 .k-look{background:rgba(47,125,79,.12);color:var(--good)}
 .k-setting{background:rgba(178,107,0,.12);color:var(--warn)}
@@ -1333,6 +1425,7 @@ details>summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px
 .tag{display:inline-block;font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);border:1px solid var(--line);border-radius:6px;padding:1px 6px;margin-left:8px;vertical-align:2px;font-weight:400}
 .body{padding:0 20px 20px 46px}
 details.play .body{padding:0 20px 18px}
+@media (max-width:640px){details.play>summary{grid-template-columns:1fr;gap:6px}details.play>summary .kind{justify-self:start}}
 .rung{margin-top:14px}
 .rung h4{margin:0 0 4px;font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
 .rung p{margin:0 0 6px}
@@ -1551,7 +1644,8 @@ def render_html(report):
     plays = playbook(report)
     add("<section><h2>Recommended commands</h2><p class=\"sub\">The handful of commands that "
         "apply to this Mac right now. Open one to see what it does; switch to Technical for "
-        "every part of it. Run them from the Neptune <code>scripts</code> folder.</p>"
+        "every part of it. Run them from the Neptune <code>scripts</code> folder; "
+        "<code>./neptune.sh</code> also works from the top folder.</p>"
         "<div class=\"panel plays\">")
     for pl in plays:
         add("<details class=\"play\"><summary><span><span class=\"ttl\">%s</span>"
@@ -1922,6 +2016,36 @@ def software_from_json(path):
     return rows
 
 
+DEEP_TOOLS = ("yara", "clamscan")
+
+
+def _deep_list(text):
+    """Space-separated tool names, only the ones Neptune knows."""
+    return [t for t in str(text or "").split() if t in DEEP_TOOLS]
+
+
+def deep_state(args):
+    """Which malware scanners were ready on this run: {"ready", "installed"},
+    or None when the run did not record it (a replayed findings file). Comes
+    from neptune.sh; the renderer never probes the machine itself."""
+    if not getattr(args, "deep_known", False):
+        return None
+    return {"ready": _deep_list(getattr(args, "deep_ready", "")),
+            "installed": _deep_list(getattr(args, "deep_installed", ""))}
+
+
+def deep_from_json(path):
+    """The scanner state a saved --json carried, as the three lines neptune.sh
+    reads back: known (1/0), ready, installed."""
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        data = json.load(fh)
+    d = data.get("deep_inspection")
+    if not isinstance(d, dict):
+        return "0\n\n\n"
+    return "1\n%s\n%s\n" % (" ".join(_deep_list(" ".join(d.get("ready") or []))),
+                               " ".join(_deep_list(" ".join(d.get("installed") or []))))
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--format", choices=("json", "html", "brief"))
@@ -1933,6 +2057,9 @@ def main(argv=None):
     ap.add_argument("--replay-source", default="")
     ap.add_argument("--brief-name", default=""); ap.add_argument("--json-name", default="")
     ap.add_argument("--inventory", default=""); ap.add_argument("--inventory-out")
+    ap.add_argument("--deep-known", action="store_true")
+    ap.add_argument("--deep-ready", default=""); ap.add_argument("--deep-installed", default="")
+    ap.add_argument("--deep-out")
     ap.add_argument("--sanitize", action="store_true")
     ap.add_argument("--json-to-records"); ap.add_argument("--records-out"); ap.add_argument("--allow-out")
     args = ap.parse_args(argv)
@@ -1951,6 +2078,9 @@ def main(argv=None):
             with open(args.inventory_out, "w", encoding="utf-8") as fh:
                 for s in software_from_json(args.json_to_records):
                     fh.write(s + "\n")
+        if args.deep_out:
+            with open(args.deep_out, "w", encoding="utf-8") as fh:
+                fh.write(deep_from_json(args.json_to_records))
         return 0
 
     if not (args.format and args.scored and args.scores):

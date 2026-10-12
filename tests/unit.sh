@@ -51,7 +51,7 @@ NEPTUNE_LIB=1 . scripts/neptune.sh
 t_section "Every script runs in the C locale (DEVLOG Bug 13)"
 ############################################################
 MISSING=""
-for F in scripts/*.sh; do
+for F in neptune.sh scripts/*.sh; do
   grep -q '^export LC_ALL=C' "$F" || MISSING="$MISSING $F"
 done
 t_is "every script exports LC_ALL=C" "" "$MISSING"
@@ -335,6 +335,107 @@ HOME="$T/nofix" ./scripts/fix.sh --plan >/dev/null 2>&1
 t_is "no saved run yet: exit 64" "64" "$?"
 
 ############################################################
+t_section "inspect_deep.sh — optional enrichment (yara/clamav)"
+############################################################
+(
+  export HOME="$T/home-di"; export NEPTUNE_HOME="$HOME/.neptune"
+  mkdir -p "$NEPTUNE_HOME/yara"
+  # shellcheck source=/dev/null
+  NEPTUNE_LIB=1 . scripts/inspect_deep.sh >/dev/null 2>&1
+
+  # classify yara: exit is always 0, so output is what tells a hit from a clean.
+  t_is "yara: output is a hit, first token is the rule" "hit:Evil_Rule" "$(deep_classify_yara 0 'Evil_Rule /some/file')"
+  t_is "yara: no output is clean"                        "clean"        "$(deep_classify_yara 0 '')"
+  t_is "yara: a non-zero exit is an error"               "err"          "$(deep_classify_yara 2 '')"
+
+  # a stub that "runs": --version succeeds, a path with 'evil' matches.
+  cat > "$STUBS/yarastub" <<'STUB'
+#!/bin/bash
+[ "$1" = "--version" ] && { echo 4.5.0; exit 0; }
+case "$2" in *evil*) echo "OSX_Backdoor $2"; exit 0 ;; *) exit 0 ;; esac
+STUB
+  chmod +x "$STUBS/yarastub"
+  t_is "deep_tool uses the DEEP_ override when it is executable" "$STUBS/yarastub" "$(DEEP_YARA="$STUBS/yarastub" deep_tool yara)"
+  t_is "deep_tool is empty when the override points at nothing"  ""               "$(DEEP_YARA=/no/such/thing deep_tool yara)"
+
+  # yara counts as an enricher only once it has rules.
+  t_is "no rules yet: yara is not an enricher"   "" "$(DEEP_YARA="$STUBS/yarastub" deep_enrichers)"
+  echo 'rule X { condition: true }' > "$NEPTUNE_HOME/yara/neptune.yar"
+  t_is "with rules: yara is an enricher"          "yara" "$(DEEP_YARA="$STUBS/yarastub" deep_enrichers)"
+
+  touch "$T/evil.bin" "$T/good.bin"
+  RULES=$(deep_yara_rules)
+  t_is "scan: a matching file is a hit with the rule" "hit:OSX_Backdoor" "$(deep_scan_file yara "$STUBS/yarastub" "$T/evil.bin" "$RULES")"
+  t_is "scan: a non-matching file is clean"           "clean"            "$(deep_scan_file yara "$STUBS/yarastub" "$T/good.bin" "$RULES")"
+  t_is "scan: a missing file is absent, not a hit"    "absent"           "$(deep_scan_file yara "$STUBS/yarastub" "$T/gone.bin" "$RULES")"
+  t_is "scan: yara with no rules is absent"           "absent"           "$(deep_scan_file yara "$STUBS/yarastub" "$T/evil.bin" '')"
+
+  # A clamscan stub that prints what the real one prints (captured from ClamAV
+  # 1.5.4): one line per file, exit 1 when anything matched; with no signatures,
+  # --version has no "/<db>/<date>" and every scan fails with "No supported
+  # database files found".
+  cat > "$STUBS/clamstub" <<'STUB'
+#!/bin/bash
+if [ "$1" = "--version" ]; then
+  if [ -n "${STUB_NODB:-}" ]; then echo "ClamAV 1.4.1"; else echo "ClamAV 1.4.1/27411/Sat Oct 10 07:24:02 2026"; fi
+  exit 0
+fi
+if [ -n "${STUB_NODB:-}" ]; then
+  echo "LibClamAV Error: cli_loaddbdir: No supported database files found in /opt/homebrew/var/lib/clamav"
+  echo "ERROR: Can't open file or directory"; exit 2
+fi
+rc=0
+for a in "$@"; do
+  case "$a" in -*) continue ;; esac
+  case "$a" in
+    *evil*)   echo "$a: Osx.Trojan.Stub-1 FOUND"; rc=1 ;;
+    *locked*) echo "$a: Access denied" ;;
+    *silent*) : ;;
+    *)        echo "$a: OK" ;;
+  esac
+done
+exit $rc
+STUB
+  chmod +x "$STUBS/clamstub"
+  if deep_clam_ready "$STUBS/clamstub"; then t_ok "clamav with signatures is ready"; else t_fail "clamav with signatures is ready" yes no; fi
+  if STUB_NODB=1 deep_clam_ready "$STUBS/clamstub"; then t_fail "clamav with no signatures is NOT ready" no yes; else t_ok "clamav with no signatures is NOT ready"; fi
+  t_is "enrichers: clamav with signatures counts" "clamscan" \
+     "$(DEEP_YARA=/no/such DEEP_CLAMSCAN="$STUBS/clamstub" deep_enrichers)"
+  t_is "enrichers: clamav without signatures does not count (no 'could not inspect' noise)" "" \
+     "$(STUB_NODB=1 DEEP_YARA=/no/such DEEP_CLAMSCAN="$STUBS/clamstub" deep_enrichers)"
+  t_is "but it still counts as installed" "clamscan" \
+     "$(STUB_NODB=1 DEEP_YARA=/no/such DEEP_CLAMSCAN="$STUBS/clamstub" deep_tools_present)"
+  t_is "batch: one run, a verdict per file in order; a path with a space; no line is an error" \
+     "hit:Osx.Trojan.Stub-1|clean|err|err" \
+     "$(deep_clam_batch "$STUBS/clamstub" "$T/evil.bin" "$T/good file.bin" "$T/locked.bin" "$T/silent.bin" | cut -f2 | tr '\n' '|' | sed 's/|$//')"
+  t_is "batch: the file names come back unchanged" "$T/good file.bin" \
+     "$(deep_clam_batch "$STUBS/clamstub" "$T/evil.bin" "$T/good file.bin" | sed -n 2p | cut -f1)"
+  t_is "batch: no signatures loaded means absent, never an error charged to the file" "absent|absent" \
+     "$(STUB_NODB=1 deep_clam_batch "$STUBS/clamstub" "$T/evil.bin" "$T/good.bin" | cut -f2 | tr '\n' '|' | sed 's/|$//')"
+  t_is "single-file scan goes through the same parser" "hit:Osx.Trojan.Stub-1" \
+     "$(deep_scan_file clamscan "$STUBS/clamstub" "$T/evil.bin")"
+
+  # Homebrew's ClamAV config: the commands shown are the commands run.
+  CF="$T/hb/etc/clamav/freshclam.conf"; mkdir -p "$(dirname "$CF")"
+  printf 'Example\nDatabaseMirror database.clamav.net\n' > "$CF.sample"
+  t_is "the sed shown is this sed's in-place spelling" "1" \
+     "$(deep_conf_steps "$CF" | grep -cF "$(deep_sed_i) 's/^Example/#Example/'")"
+  if deep_make_freshclam_conf "$CF"; then t_ok "creates freshclam.conf from the sample"; else t_fail "creates freshclam.conf from the sample" ok fail; fi
+  t_is "...with the Example line commented out, nothing else changed" "#Example|DatabaseMirror database.clamav.net" \
+     "$(tr '\n' '|' < "$CF" | sed 's/|$//')"
+  echo "mine" > "$CF"
+  if deep_make_freshclam_conf "$CF"; then t_fail "never overwrites a config that exists" refused overwrote; else t_ok "never overwrites a config that exists"; fi
+  t_is "...and leaves it as it was" "mine" "$(cat "$CF")"
+
+  # The next step, in one wording for the scan, --inspect and the report.
+  t_is "next step, nothing installed: the brew command" "1" \
+     "$(DEEP_YARA=/no/such DEEP_CLAMSCAN=/no/such deep_next_step | grep -c 'brew install clamav')"
+  t_is "next step, clamav without signatures: download them, no install" "1|0" \
+     "$(STUB_NODB=1 DEEP_YARA=/no/such DEEP_CLAMSCAN="$STUBS/clamstub" deep_next_step > "$T/ns.txt"
+        printf '%s|%s' "$(grep -c -- '--update-rules' "$T/ns.txt")" "$(grep -c 'brew install' "$T/ns.txt")")"
+)
+
+############################################################
 t_section "Every scan's record() writes one well-formed line"
 ############################################################
 for S in sentry redflag_scan network_check audit_system check_updates; do
@@ -527,6 +628,43 @@ done
 t_is "every scan ends in an explicit exit 0 (a crash is then distinguishable)" "" \
    "$(for S in sentry redflag_scan network_check audit_system check_updates; do
         tail -3 "scripts/$S.sh" | grep -q '^exit 0' || echo "$S"; done)"
+
+############################################################
+t_section "./neptune.sh works from the top folder too (real run, 2026-10)"
+############################################################
+t_is "the top-level neptune.sh is the same program" "$(bash scripts/neptune.sh --version)" "$(./neptune.sh --version)"
+./neptune.sh --no-such-flag >/dev/null 2>&1
+t_is "its exit codes are the real script's (unknown flag: 64)" "64" "$?"
+mkdir -p "$T/elsewhere/bin"
+ln -s "$REPO/neptune.sh" "$T/elsewhere/bin/neptune"
+t_is "a symlink to it, run from another folder, still finds scripts/" "$(bash scripts/neptune.sh --version)" \
+   "$(cd "$T/elsewhere" && ./bin/neptune --version)"
+mkdir -p "$T/stray"; cp neptune.sh "$T/stray/neptune.sh"
+"$T/stray/neptune.sh" --version >/dev/null 2>&1
+t_is "a copy with no scripts/ beside it says so and exits 64" "64" "$?"
+
+############################################################
+t_section "--inspect says what is true (real run, 2026-10)"
+############################################################
+IH="$T/inspect-home"; mkdir -p "$IH/.neptune"
+HOME="$IH" DEEP_YARA=/no DEEP_CLAMSCAN=/no ./neptune.sh --inspect >/dev/null 2>&1
+t_is "never scanned on this version: exit 64 (nothing to re-check)" "64" "$?"
+HOME="$IH" DEEP_YARA=/no DEEP_CLAMSCAN=/no ./neptune.sh --inspect --update-rules >/dev/null 2>&1
+t_is "...but after --update-rules that is not an error: exit 0" "0" "$?"
+: > "$IH/.neptune/last-flagged.tsv"
+EMPTY_OUT=$(HOME="$IH" DEEP_YARA=/no DEEP_CLAMSCAN=/no ./neptune.sh --inspect 2>&1); EMPTY_RC=$?
+t_is "an EMPTY list means the last scan flagged nothing — not 'never scanned'" \
+   "Your last scan flagged no files, so there is nothing to check.|0" "$EMPTY_OUT|$EMPTY_RC"
+if [ "$(id -u)" -ne 0 ]; then
+  touch "$T/ok_helper" "$T/rootonly_helper"; chmod 000 "$T/rootonly_helper"
+  printf '%s\n' "$T/ok_helper" "$T/rootonly_helper" > "$IH/.neptune/last-flagged.tsv"
+  RO=$(HOME="$IH" DEEP_YARA=/no DEEP_CLAMSCAN="$STUBS/clamstub" ./neptune.sh --inspect --out "$T" 2>&1)
+  t_is "a root-only file is skipped and said, never a 'could not inspect' unknown" "1|0" \
+     "$(printf '%s' "$RO" | grep -c 'can only be read by root')|$(printf '%s' "$RO" | grep -c 'could not inspect')"
+  chmod 600 "$T/rootonly_helper"
+else
+  printf '  skip  root-only skip (running as root here; runs on macOS and in CI)\n'
+fi
 
 ############################################################
 t_section "Recorded titles must stand alone"
