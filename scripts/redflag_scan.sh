@@ -193,57 +193,66 @@ already_flagged() { printf '%s\n' "$FLAGGED_BINS" | grep -qxF "$1"; }
 # "add an attention record for the same file". Both lines then show — the file
 # was flagged for being unsigned AND it matches a signature — which is honest.
 deep_enrich() {
-  local ENR RULES FILE FILES TOOL TOOLP VERD HITS=0 SCANNED=0
+  local ENR RULES FILE FILES TOOL VERD YP CP TAB DEEPOUT="" HITS=0
+  local -a EXIST
+  EXIST=()
   ENR=$(deep_enrichers)
   if [ -z "$ENR" ]; then deep_offer_install; return 0; fi
   FILES=$(printf '%s\n' "$FLAGGED_BINS" | awk 'NF && !seen[$0]++ && /^\//')
-  [ -n "$FILES" ] || return 0
-  RULES=$(deep_yara_rules)
-  CHECK=malware-signature
-  section "Deep inspection (optional)"
-  note "Checking the files flagged above against known-malware signatures."
   while IFS= read -r FILE; do
-    [ -n "$FILE" ] || continue
-    [ -f "$FILE" ] || continue
-    SCANNED=$((SCANNED + 1))
-    while IFS= read -r TOOL; do
-      [ -n "$TOOL" ] || continue
-      TOOLP=$(deep_tool "$TOOL")
-      VERD=$(deep_scan_file "$TOOL" "$TOOLP" "$FILE" "$RULES")
-      case "$VERD" in
-        hit:*) flag "$(deep_label "$TOOL") signature match on a flagged file: ${VERD#hit:} ($FILE)"; HITS=$((HITS + 1)) ;;
-        err)   unknown "$(deep_label "$TOOL") could not inspect $FILE" ;;
-        *)     : ;;
-      esac
-    done <<ENRICHERS
-$ENR
-ENRICHERS
+    [ -n "$FILE" ] && [ -f "$FILE" ] && EXIST+=("$FILE")
   done <<FLAGGEDFILES
 $FILES
 FLAGGEDFILES
-  if [ "$SCANNED" -gt 0 ] && [ "$HITS" -eq 0 ]; then
+  [ ${#EXIST[@]} -gt 0 ] || return 0
+  TAB=$(printf '\t')
+  CHECK=malware-signature
+  section "Deep inspection (optional)"
+  note "Checking the ${#EXIST[@]} file(s) flagged above against known-malware signatures."
+  # Results collect as tool<TAB>file<TAB>verdict, then are recorded in this
+  # shell (a heredoc, not a pipe) so flag() still reaches the summary.
+  if printf '%s\n' "$ENR" | grep -qx yara; then
+    # YARA: one run per file; compiled rules load quickly.
+    YP=$(deep_tool yara); RULES=$(deep_yara_rules)
+    for FILE in "${EXIST[@]}"; do
+      DEEPOUT="$DEEPOUT
+yara$TAB$FILE$TAB$(deep_scan_file yara "$YP" "$FILE" "$RULES")"
+    done
+  fi
+  if printf '%s\n' "$ENR" | grep -qx clamscan; then
+    # ClamAV: ONE run over every file — each run loads the whole signature set.
+    CP=$(deep_tool clamscan)
+    DEEPOUT="$DEEPOUT
+$(deep_clam_batch "$CP" "${EXIST[@]}" | awk '{print "clamscan\t" $0}')"
+  fi
+  while IFS="$TAB" read -r TOOL FILE VERD; do
+    [ -n "$TOOL" ] || continue
+    case "$VERD" in
+      hit:*) flag "$(deep_label "$TOOL") signature match on a flagged file: ${VERD#hit:} ($FILE)"; HITS=$((HITS + 1)) ;;
+      err)   unknown "$(deep_label "$TOOL") could not inspect $FILE" ;;
+      *)     : ;;
+    esac
+  done <<DEEPRESULTS
+$DEEPOUT
+DEEPRESULTS
+  if [ "$HITS" -eq 0 ]; then
     # Reassurance, printed but not recorded: a clean sweep is not a finding, and
     # must never read, in the report, as if it cleared the items it scanned.
-    note "No signature matched the $SCANNED flagged file(s) checked — reassurance, not a clearance."
+    note "No signature matched the ${#EXIST[@]} flagged file(s) checked — reassurance, not a clearance."
   fi
 }
 
 # deep_offer_install — shown only when something was flagged but no enricher is
 # ready. Neptune prints the command; it never installs or fetches anything.
 deep_offer_install() {
-  local HAVE
+  local L
   [ -n "$(printf '%s\n' "$FLAGGED_BINS" | awk 'NF && /^\//')" ] || return 0
   section "Deep inspection (optional)"
-  HAVE=$(deep_tools_present)
-  if printf '%s\n' "$HAVE" | grep -qx yara && [ -z "$(deep_yara_rules)" ]; then
-    note "YARA is installed but has no rules yet. Point it at a ruleset you trust:"
-    note "  NEPTUNE_YARA_URL=<url> ./neptune.sh --inspect --update-rules"
-  else
-    note "No deep-inspection tool is installed. To check the flagged files against"
-    note "known-malware signatures (Neptune installs and fetches nothing itself):"
-    note "  brew install clamav   then  ./neptune.sh --inspect --update-rules"
-    note "  brew install yara     then  ./neptune.sh --inspect --update-rules"
-  fi
+  while IFS= read -r L; do
+    note "$L"
+  done <<NEXTSTEP
+$(deep_next_step)
+NEXTSTEP
 }
 
 # --inspect mode (NEPTUNE_INSPECT_ONLY=1): skip every normal scan and run only

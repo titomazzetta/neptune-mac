@@ -28,6 +28,22 @@ explains each in full — symptom, root cause, fix, and what was learned.
   when set) — Neptune never bakes in a third-party rules source for you. Rules live
   under `~/.neptune/yara/`; `rm -rf` that folder removes everything fetched. New
   `scripts/inspect_deep.sh`; see `claude/PR-6-optional-enrichment.md`.
+- **"Dig deeper" in the report's Recommended commands.** When something was
+  flagged that a malware scanner could speak to, the HTML now offers the next
+  step that fits this Mac: `brew install clamav` then `--inspect --update-rules`
+  when no scanner is installed; just `--update-rules` when ClamAV has no
+  signatures yet or YARA has no rules; a re-check with fresh signatures when one
+  already ran. Each is explained part by part with its undo. Whether a scanner
+  was ready is recorded by `neptune.sh` (the renderer never probes the machine)
+  and travels in the JSON as `deep_inspection`, so `--replay` reproduces it.
+- **ClamAV is only "ready" with signatures, and runs once per scan.** A fresh
+  `brew install clamav` has no signature database, and every scan then exits 2 —
+  which would have read as "could not inspect" on every flagged file and pushed
+  the verdict to incomplete. Installed-without-signatures now means "not ready",
+  with the command that fixes it. All flagged files go through one `clamscan`
+  run (each run loads the full signature set), read line by line per file.
+  `--update-rules` shows the two commands Homebrew's ClamAV needs to create
+  `freshclam.conf` rather than failing vaguely, and never writes it itself.
 
 ## [1.3.0] — 2026-10-12
 

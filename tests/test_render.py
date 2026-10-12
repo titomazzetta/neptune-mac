@@ -482,6 +482,77 @@ class Enrichment(unittest.TestCase):
         # An unknown is advised as could-not-check, never as the failure state.
         self.assertNotIn("matches a known-malware", f["advice"].get("means", ""))
 
+    FLAGGED = {"check": "persistence-launchd", "severity": "attention", "acknowledged": False,
+               "n": 1, "headline": "h",
+               "title": "UNSIGNED persistence: com.x runs /Library/Foo/bar (/Library/LaunchAgents/com.x.plist)"}
+
+    def _dig(self, deep, findings=None):
+        report = {"findings": findings if findings is not None else [dict(self.FLAGGED)],
+                  "deep_inspection": deep}
+        cmds = [p["command"] for p in R.playbook(report)]
+        return [c for c in cmds if "--inspect" in c or c.startswith("brew install")]
+
+    def test_dig_deeper_fits_what_this_mac_has(self):
+        # Unknown (a replayed findings file): --inspect, which prints its own install hint.
+        self.assertEqual(self._dig(None), ["./neptune.sh --inspect"])
+        # Nothing installed: install first, then check — in that order.
+        self.assertEqual(self._dig({"ready": [], "installed": []}),
+                         ["brew install clamav", "./neptune.sh --inspect --update-rules"])
+        # Installed but not ready (no signatures, or no YARA rules): never "install".
+        for inst in (["clamscan"], ["yara"]):
+            self.assertEqual(self._dig({"ready": [], "installed": inst}),
+                             ["./neptune.sh --inspect --update-rules"], inst)
+        # Already ran this scan: offer a re-check with fresh signatures.
+        plays = R.playbook({"findings": [dict(self.FLAGGED)],
+                            "deep_inspection": {"ready": ["clamscan"], "installed": ["clamscan"]}})
+        recheck = [p for p in plays if "--inspect" in p["command"]]
+        self.assertEqual(len(recheck), 1)
+        self.assertIn("ClamAV already checked", recheck[0]["short"])
+
+    def test_dig_deeper_only_when_something_was_flagged(self):
+        firewall = {"check": "firewall", "severity": "attention", "acknowledged": False, "n": 1,
+                    "title": "Application firewall is OFF", "headline": "h"}
+        self.assertEqual(self._dig({"ready": [], "installed": []}, [firewall]), [])
+        kept = dict(self.FLAGGED, acknowledged=True)
+        self.assertEqual(self._dig({"ready": [], "installed": []}, [kept]), [],
+                         "an item you kept is not a reason to install a scanner")
+
+    def test_dig_deeper_commands_are_explained_and_never_reach_out_themselves(self):
+        for deep in (None, {"ready": [], "installed": []}, {"ready": [], "installed": ["yara"]},
+                     {"ready": ["yara"], "installed": ["yara"]}):
+            for p in R.playbook({"findings": [dict(self.FLAGGED)], "deep_inspection": deep}):
+                self.assertTrue(R.explain_command(p["command"]), p["command"])
+                self.assertIn(p["kind"], R.KINDS)
+                self.assertNotRegex(p["short"] + p["detail"] + p["undo"], r"https?://")
+
+    def test_scanner_state_survives_a_json_replay(self):
+        out = tempfile.mkdtemp()
+        try:
+            fx = os.path.join(out, "f.txt")
+            with open(fx, "w", encoding="utf-8") as fh:
+                fh.write("attention|security|redflag|persistence-launchd|%s\n" % self.FLAGGED["title"])
+            run(["bash", "scripts/neptune.sh", "--replay", fx, "--json", "--out", out], env={"HOME": out})
+            js = os.path.join(out, "neptune_findings_replay.json")
+            with open(js, encoding="utf-8") as fh:
+                data = json.load(fh)
+            self.assertIsNone(data["deep_inspection"], "a findings file records no scanner state")
+            data["deep_inspection"] = {"ready": [], "installed": ["clamscan"]}
+            saved = os.path.join(out, "saved.json")
+            with open(saved, "w", encoding="utf-8") as fh:
+                json.dump(data, fh)
+            os.remove(js)
+            run(["bash", "scripts/neptune.sh", "--replay", saved, "--html", "--json", "--out", out],
+                env={"HOME": out})
+            with open(js, encoding="utf-8") as fh:
+                again = json.load(fh)
+            with open(os.path.join(out, "neptune_report_replay.html"), encoding="utf-8") as fh:
+                html = fh.read()
+        finally:
+            shutil.rmtree(out, ignore_errors=True)
+        self.assertEqual(again["deep_inspection"], {"ready": [], "installed": ["clamscan"]})
+        self.assertIn("Download ClamAV&#x27;s signatures", html)
+        self.assertNotIn("brew install clamav", html)
+
     def test_only_update_rules_touches_the_network(self):
         """The base scan and the enrichment pass stay network-silent: the only
         references to curl/wget/freshclam/http live inside deep_update_rules, and

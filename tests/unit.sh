@@ -347,10 +347,6 @@ t_section "inspect_deep.sh — optional enrichment (yara/clamav)"
   t_is "yara: output is a hit, first token is the rule" "hit:Evil_Rule" "$(deep_classify_yara 0 'Evil_Rule /some/file')"
   t_is "yara: no output is clean"                        "clean"        "$(deep_classify_yara 0 '')"
   t_is "yara: a non-zero exit is an error"               "err"          "$(deep_classify_yara 2 '')"
-  # classify clamscan: 0 clean, 1 infected (signature parsed), else error.
-  t_is "clamav: exit 1 is a hit, signature parsed" "hit:Eicar-Test-Signature" "$(deep_classify_clam 1 '/x/f: Eicar-Test-Signature FOUND')"
-  t_is "clamav: exit 0 is clean"                   "clean"                     "$(deep_classify_clam 0 '')"
-  t_is "clamav: any other exit is an error"        "err"                       "$(deep_classify_clam 2 'broke')"
 
   # a stub that "runs": --version succeeds, a path with 'evil' matches.
   cat > "$STUBS/yarastub" <<'STUB'
@@ -373,6 +369,58 @@ STUB
   t_is "scan: a non-matching file is clean"           "clean"            "$(deep_scan_file yara "$STUBS/yarastub" "$T/good.bin" "$RULES")"
   t_is "scan: a missing file is absent, not a hit"    "absent"           "$(deep_scan_file yara "$STUBS/yarastub" "$T/gone.bin" "$RULES")"
   t_is "scan: yara with no rules is absent"           "absent"           "$(deep_scan_file yara "$STUBS/yarastub" "$T/evil.bin" '')"
+
+  # A clamscan stub that prints what the real one prints (captured from ClamAV
+  # 1.5.4): one line per file, exit 1 when anything matched; with no signatures,
+  # --version has no "/<db>/<date>" and every scan fails with "No supported
+  # database files found".
+  cat > "$STUBS/clamstub" <<'STUB'
+#!/bin/bash
+if [ "$1" = "--version" ]; then
+  if [ -n "${STUB_NODB:-}" ]; then echo "ClamAV 1.4.1"; else echo "ClamAV 1.4.1/27411/Sat Oct 10 07:24:02 2026"; fi
+  exit 0
+fi
+if [ -n "${STUB_NODB:-}" ]; then
+  echo "LibClamAV Error: cli_loaddbdir: No supported database files found in /opt/homebrew/var/lib/clamav"
+  echo "ERROR: Can't open file or directory"; exit 2
+fi
+rc=0
+for a in "$@"; do
+  case "$a" in -*) continue ;; esac
+  case "$a" in
+    *evil*)   echo "$a: Osx.Trojan.Stub-1 FOUND"; rc=1 ;;
+    *locked*) echo "$a: Access denied" ;;
+    *silent*) : ;;
+    *)        echo "$a: OK" ;;
+  esac
+done
+exit $rc
+STUB
+  chmod +x "$STUBS/clamstub"
+  if deep_clam_ready "$STUBS/clamstub"; then t_ok "clamav with signatures is ready"; else t_fail "clamav with signatures is ready" yes no; fi
+  if STUB_NODB=1 deep_clam_ready "$STUBS/clamstub"; then t_fail "clamav with no signatures is NOT ready" no yes; else t_ok "clamav with no signatures is NOT ready"; fi
+  t_is "enrichers: clamav with signatures counts" "clamscan" \
+     "$(DEEP_YARA=/no/such DEEP_CLAMSCAN="$STUBS/clamstub" deep_enrichers)"
+  t_is "enrichers: clamav without signatures does not count (no 'could not inspect' noise)" "" \
+     "$(STUB_NODB=1 DEEP_YARA=/no/such DEEP_CLAMSCAN="$STUBS/clamstub" deep_enrichers)"
+  t_is "but it still counts as installed" "clamscan" \
+     "$(STUB_NODB=1 DEEP_YARA=/no/such DEEP_CLAMSCAN="$STUBS/clamstub" deep_tools_present)"
+  t_is "batch: one run, a verdict per file in order; a path with a space; no line is an error" \
+     "hit:Osx.Trojan.Stub-1|clean|err|err" \
+     "$(deep_clam_batch "$STUBS/clamstub" "$T/evil.bin" "$T/good file.bin" "$T/locked.bin" "$T/silent.bin" | cut -f2 | tr '\n' '|' | sed 's/|$//')"
+  t_is "batch: the file names come back unchanged" "$T/good file.bin" \
+     "$(deep_clam_batch "$STUBS/clamstub" "$T/evil.bin" "$T/good file.bin" | sed -n 2p | cut -f1)"
+  t_is "batch: no signatures loaded means absent, never an error charged to the file" "absent|absent" \
+     "$(STUB_NODB=1 deep_clam_batch "$STUBS/clamstub" "$T/evil.bin" "$T/good.bin" | cut -f2 | tr '\n' '|' | sed 's/|$//')"
+  t_is "single-file scan goes through the same parser" "hit:Osx.Trojan.Stub-1" \
+     "$(deep_scan_file clamscan "$STUBS/clamstub" "$T/evil.bin")"
+
+  # The next step, in one wording for the scan, --inspect and the report.
+  t_is "next step, nothing installed: the brew command" "1" \
+     "$(DEEP_YARA=/no/such DEEP_CLAMSCAN=/no/such deep_next_step | grep -c 'brew install clamav')"
+  t_is "next step, clamav without signatures: download them, no install" "1|0" \
+     "$(STUB_NODB=1 DEEP_YARA=/no/such DEEP_CLAMSCAN="$STUBS/clamstub" deep_next_step > "$T/ns.txt"
+        printf '%s|%s' "$(grep -c -- '--update-rules' "$T/ns.txt")" "$(grep -c 'brew install' "$T/ns.txt")")"
 )
 
 ############################################################

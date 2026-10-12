@@ -269,7 +269,8 @@ run's flagged files in seconds. `./neptune.sh --inspect --update-rules` updates
 signatures — the one part of Neptune that reaches the network: ClamAV's own
 `freshclam`, and YARA rules only from a source you name (`NEPTUNE_YARA_URL`),
 because Neptune won't pick a third-party ruleset for you. Rules live in
-`~/.neptune/yara`; delete that folder to remove them.
+`~/.neptune/yara`; delete that folder to remove them. When something is flagged,
+the report's Recommended commands say which of these steps fits your Mac.
 
 **Reading the results.** A flag is a lead, not a verdict. [`docs/reading-reports.md`](docs/reading-reports.md)
 covers telling a real finding from a vendor habit.

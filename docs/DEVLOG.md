@@ -1296,6 +1296,24 @@ source — baking an unverified external source into a security tool is the exac
 thing the tool warns about. A test asserts `curl`/`wget`/`freshclam`/`http` live
 only inside `deep_update_rules`, and nowhere in `redflag_scan.sh`.
 
+### Bug 24 — a scanner with no signatures is not a scanner
+
+Adding the report's "dig deeper" commands meant walking the exact path they
+recommend: `brew install clamav`, then scan. Run against the real binary, a fresh
+ClamAV has no signature database: `clamscan --version` still succeeds (so
+Neptune counted it as ready), and every scan exits 2 with "No supported database
+files found". The classifier turned that into an `unknown` for every flagged
+file — fail-closed in form, but wrong in substance: the files were fine, the
+tool wasn't ready, and the verdict would have dropped to incomplete for
+installing a scanner. Readiness now requires the database version in
+`clamscan --version`, and a run that loads no signatures marks files `absent`,
+never `err`. The same walk found two more things: each `clamscan` run reloads
+millions of signatures, so files are now scanned in one run and read back line
+by line (`deep_clam_batch`, checked against the real binary's output); and
+Homebrew's ClamAV refuses to update until `freshclam.conf` exists, so
+`--update-rules` shows the two commands that create it. Lesson, again: run the
+real tool on the path you tell people to take, not just a stub of it.
+
 ## Where it's going
 
 See `ROADMAP.md`. The next gap is login items registered through

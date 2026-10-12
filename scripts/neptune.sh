@@ -571,6 +571,10 @@ USAGE
 JSON_OUT=false; HTML_OUT=false; SANITIZE_OUT=false; VERBOSE=false; NO_HTML=false
 ACK_ARG=""; REPLAY=""; OUT_DIR=""; BRIEF_NAME=""; JSON_NAME=""
 INSPECT=false; UPDATE_RULES=false
+# Whether a malware scanner was ready on THIS run, for the report's "dig deeper"
+# commands. Set from the machine on a full run, from the JSON on a replay, and
+# left unknown for a replayed findings file — the renderer never probes.
+DEEP_KNOWN=""; DEEP_READY=""; DEEP_INSTALLED=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --json)        JSON_OUT=true ;;
@@ -665,6 +669,7 @@ render() {
     ${RENDER_SEEN:+--seen "$RENDER_SEEN"} \
     ${RENDER_REPLAY:+--replay-source "$RENDER_REPLAY"} \
     --inventory "$INVENTORY" \
+    ${DEEP_KNOWN:+--deep-known} --deep-ready "$DEEP_READY" --deep-installed "$DEEP_INSTALLED" \
     ${BRIEF_NAME:+--brief-name "$BRIEF_NAME"} ${JSON_NAME:+--json-name "$JSON_NAME"} > "$OUTF"
 }
 
@@ -681,7 +686,12 @@ if [ -n "$REPLAY" ]; then
   INVENTORY="$TMP/inventory.tsv"; : > "$INVENTORY"
   case "$REPLAY" in
     *.json) PYTHONUTF8=1 "$NEP_PY" "$RENDERER" --json-to-records "$REPLAY" --inventory-out "$INVENTORY" \
-              --records-out "$FINDINGS" --allow-out "$RALLOW" || exit 64 ;;
+              --deep-out "$TMP/deep.txt" --records-out "$FINDINGS" --allow-out "$RALLOW" || exit 64
+            # Line 1: 1 when the saved run recorded its scanner state; 2: ready; 3: installed.
+            if [ -s "$TMP/deep.txt" ]; then
+              { read -r DK; read -r DEEP_READY; read -r DEEP_INSTALLED; } < "$TMP/deep.txt"
+              [ "$DK" = 1 ] && DEEP_KNOWN=1
+            fi ;;
     *)      cp "$REPLAY" "$FINDINGS" ;;
   esac
   nep_run_pipeline "$FINDINGS" "$RALLOW" "$TMP" "replay of $(basename "$REPLAY")"
@@ -722,9 +732,7 @@ if $INSPECT; then
     exit 64
   fi
   if [ -z "$(deep_enrichers)" ]; then
-    echo "No deep-inspection tool is ready. Install one and point it at rules you trust:" >&2
-    echo "  brew install clamav   then  ./neptune.sh --inspect --update-rules" >&2
-    echo "  brew install yara     then  NEPTUNE_YARA_URL=<url> ./neptune.sh --inspect --update-rules" >&2
+    deep_next_step >&2
     exit 64
   fi
   OUT_DIR="${OUT_DIR:-$HOME/Desktop}"
@@ -887,6 +895,12 @@ STEP="4/5"; run_script audit_system.sh  audit   bloat       "SYSTEM AUDIT (resou
 STEP="5/5"; run_script check_updates.sh updates maintenance "UPDATE SCAN (macOS, brew, App Store, self-updaters)"            "Updates for macOS, Homebrew, the App Store"
 
 nep_run_pipeline "$FINDINGS" "$ALLOW" "$TMP" "$RUN_LABEL"
+
+# Which malware scanners were ready on this run (local --version checks only),
+# so the report's "dig deeper" commands fit this Mac.
+DEEP_KNOWN=1
+DEEP_READY=$(deep_enrichers | tr '\n' ' ' | sed 's/ $//')
+DEEP_INSTALLED=$(deep_tools_present | tr '\n' ' ' | sed 's/ $//')
 
 # Text report: header, verdict, then every scan's full output. Plain text —
 # the summary is rendered again with styling switched off.

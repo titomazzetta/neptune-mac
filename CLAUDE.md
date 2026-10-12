@@ -196,6 +196,11 @@ CLAUDE.md        this file
   first, uses ClamAV's `freshclam`, and fetches YARA rules only from a
   user-named `NEPTUNE_YARA_URL` — Neptune bakes in no third-party rules source.
   A test (`tests/test_render.py::Enrichment`) asserts nothing else touches the net.
+  ClamAV counts as ready only with signatures loaded (`clamscan --version` shows
+  `/<db>/<date>`), and runs ONCE over all flagged files (`deep_clam_batch`). The
+  report's "dig deeper" plays come from `dig_deeper()` and depend on
+  `deep_inspection` — scanner state that neptune.sh records and the JSON
+  carries; the renderer never probes the machine, so `--replay` stays honest.
 - **Prefer editing one script over touching many.** These are independent by
   design; a change to `sentry.sh` should not require changes elsewhere.
 

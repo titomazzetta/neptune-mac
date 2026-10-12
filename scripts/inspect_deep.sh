@@ -60,14 +60,25 @@ deep_label() {
   esac
 }
 
+# deep_clam_ready <toolpath> — true when clamscan has a signature database
+# loaded. A fresh `brew install clamav` has none: `clamscan --version` then
+# prints just "ClamAV 1.4.1", and every scan exits 2 with "No supported
+# database files found". With signatures it prints "ClamAV 1.4.1/27411/<date>".
+# Installed-without-signatures is "not ready", never "could not inspect" — the
+# file isn't the problem, the tool is.
+deep_clam_ready() {
+  "$1" --version 2>/dev/null | grep -q '^ClamAV [^/]*/[0-9]'
+}
+
 # deep_enrichers — the enrichers usable on this machine right now, one per line.
-# yara counts only when it runs AND has rules; clamscan ships its own signatures.
+# yara counts only when it runs AND has rules; clamscan only with signatures.
 deep_enrichers() {
   local p
   p=$(deep_tool yara)
   [ -n "$p" ] && [ -n "$(deep_yara_rules)" ] && echo yara
   p=$(deep_tool clamscan)
-  [ -n "$p" ] && echo clamscan
+  [ -n "$p" ] && deep_clam_ready "$p" && echo clamscan
+  return 0
 }
 
 # deep_tools_present — the enricher tools that are INSTALLED, ignoring whether
@@ -76,6 +87,28 @@ deep_enrichers() {
 deep_tools_present() {
   [ -n "$(deep_tool yara)" ]     && echo yara
   [ -n "$(deep_tool clamscan)" ] && echo clamscan
+  return 0
+}
+
+# deep_next_step — what to do when no enricher is ready, as plain lines. One
+# wording for the scan, --inspect and the report. Neptune prints the command;
+# it never installs or downloads anything on its own.
+deep_next_step() {
+  local have
+  have=$(deep_tools_present)
+  if printf '%s\n' "$have" | grep -qx clamscan; then
+    echo "ClamAV is installed but has no signatures yet. Download them (the one Neptune"
+    echo "step that uses the network), then the flagged files are checked:"
+    echo "  ./neptune.sh --inspect --update-rules"
+  elif printf '%s\n' "$have" | grep -qx yara; then
+    echo "YARA is installed but has no rules yet. Point it at a ruleset you trust:"
+    echo "  NEPTUNE_YARA_URL=<url> ./neptune.sh --inspect --update-rules"
+  else
+    echo "No malware scanner is installed. To check the flagged files against known-malware"
+    echo "signatures (Neptune installs and downloads nothing on its own):"
+    echo "  brew install clamav   then  ./neptune.sh --inspect --update-rules"
+    echo "  (YARA works too: brew install yara, with rules you choose in NEPTUNE_YARA_URL)"
+  fi
 }
 
 # deep_classify_yara <exit> <output> — yara exits 0 whether or not it matched;
@@ -90,15 +123,45 @@ deep_classify_yara() {
   fi
 }
 
-# deep_classify_clam <exit> <output> — clamscan: 0 clean, 1 infected, else error.
-# An infected line ends with " FOUND" and names the signature before it. Prints:
-# hit:<SIGNATURE> | clean | err
-deep_classify_clam() {
-  case "$1" in
-    0) echo clean ;;
-    1) echo "hit:$(printf '%s\n' "$2" | awk '/ FOUND$/{sub(/ FOUND$/,""); n=split($0,a,": "); print a[n]; exit}')" ;;
-    *) echo err ;;
-  esac
+# deep_clam_batch <toolpath> <file>... — ONE clamscan run over every file, then
+# one verdict per file in input order: "<file><TAB>hit:<SIG>|clean|err|absent".
+#
+# One run, because each run loads the whole signature set (seconds to tens of
+# seconds on a Mac); once per file would multiply that. clamscan prints one line
+# per file — "<file>: OK", "<file>: <Sig> FOUND", or "<file>: <reason>" (Access
+# denied, No such file) — and exits 1 whenever anything matched, even beside
+# errors, so the lines decide, not the exit code. A file with no line at all is
+# an error, never clean. No signatures loaded ("No supported database files")
+# means the tool is not ready: every file is "absent", not charged as an error.
+# Paths are matched with index(), not a regex, so spaces and dots are literal;
+# the signature is cut after "<file>: ", an ASCII boundary, so substr() can
+# never split a multibyte character.
+deep_clam_batch() {
+  local tool=$1 out list
+  shift
+  [ $# -gt 0 ] || return 0
+  out=$("$tool" --no-summary "$@" 2>&1)
+  list=$(printf '%s\n' "$@")
+  if printf '%s\n' "$out" | grep -q 'No supported database files'; then
+    printf '%s\n' "$list" | awk '{print $0 "\tabsent"}'
+    return 0
+  fi
+  printf '%s\n' "$out" | LIST="$list" awk '
+    BEGIN { n = split(ENVIRON["LIST"], f, "\n") }
+    {
+      bi = 0; bl = 0
+      for (i = 1; i <= n; i++) {
+        p = f[i] ": "
+        if (index($0, p) == 1 && length(p) > bl) { bl = length(p); bi = i }
+      }
+      if (!bi) next
+      rest = substr($0, bl + 1)
+      if (rest == "OK") r = "clean"
+      else if (rest ~ / FOUND$/) { sub(/ FOUND$/, "", rest); r = "hit:" rest }
+      else r = "err"
+      if (v[bi] == "" || r ~ /^hit:/) v[bi] = r
+    }
+    END { for (i = 1; i <= n; i++) print f[i] "\t" (v[i] == "" ? "err" : v[i]) }'
 }
 
 # deep_scan_file <name> <toolpath> <file> [rules] — run one enricher against one
@@ -115,8 +178,7 @@ deep_scan_file() {
       deep_classify_yara "$rc" "$out"
       ;;
     clamscan)
-      out=$("$tool" --no-summary "$file" 2>/dev/null); rc=$?
-      deep_classify_clam "$rc" "$out"
+      deep_clam_batch "$tool" "$file" | awk -F'\t' 'NR == 1 {print $2}'
       ;;
     *) echo absent ;;
   esac
@@ -133,14 +195,25 @@ deep_scan_file() {
 #
 # Returns 0 if at least one update path ran, 1 if there was nothing to do.
 deep_update_rules() {
-  local did=1 dir url sum tmp got
+  local did=1 dir url sum tmp got fc conf
   echo "Updating rules and signatures. This is the only part of Neptune that"
   echo "reaches the network; everything else is local and read-only."
   echo
 
   # ClamAV signatures via its own updater.
   if [ -n "$(deep_tool clamscan)" ]; then
-    if command -v freshclam >/dev/null 2>&1; then
+    fc=$(command -v freshclam 2>/dev/null || true)
+    # Homebrew's ClamAV ships only freshclam.conf.sample, and freshclam refuses
+    # to run without the real file. Writing a third-party tool's config is a
+    # change outside ~/.neptune, so Neptune shows the two commands, not runs them.
+    conf=""
+    [ -n "$fc" ] && conf="$(dirname "$(dirname "$fc")")/etc/clamav/freshclam.conf"
+    if [ -n "$conf" ] && [ ! -f "$conf" ] && [ -f "$conf.sample" ]; then
+      echo "ClamAV: its updater needs a config file first (Homebrew ships only a"
+      echo "sample). Create it, then run this again:"
+      echo "  cp \"$conf.sample\" \"$conf\""
+      echo "  sed -i '' 's/^Example/#Example/' \"$conf\""
+    elif [ -n "$fc" ]; then
       echo "ClamAV: freshclam (official ClamAV signature servers)"
       freshclam || echo "  freshclam reported a problem; signatures may be unchanged."
       did=0
