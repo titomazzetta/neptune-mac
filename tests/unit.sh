@@ -415,6 +415,18 @@ STUB
   t_is "single-file scan goes through the same parser" "hit:Osx.Trojan.Stub-1" \
      "$(deep_scan_file clamscan "$STUBS/clamstub" "$T/evil.bin")"
 
+  # Homebrew's ClamAV config: the commands shown are the commands run.
+  CF="$T/hb/etc/clamav/freshclam.conf"; mkdir -p "$(dirname "$CF")"
+  printf 'Example\nDatabaseMirror database.clamav.net\n' > "$CF.sample"
+  t_is "the sed shown is this sed's in-place spelling" "1" \
+     "$(deep_conf_steps "$CF" | grep -cF "$(deep_sed_i) 's/^Example/#Example/'")"
+  if deep_make_freshclam_conf "$CF"; then t_ok "creates freshclam.conf from the sample"; else t_fail "creates freshclam.conf from the sample" ok fail; fi
+  t_is "...with the Example line commented out, nothing else changed" "#Example|DatabaseMirror database.clamav.net" \
+     "$(tr '\n' '|' < "$CF" | sed 's/|$//')"
+  echo "mine" > "$CF"
+  if deep_make_freshclam_conf "$CF"; then t_fail "never overwrites a config that exists" refused overwrote; else t_ok "never overwrites a config that exists"; fi
+  t_is "...and leaves it as it was" "mine" "$(cat "$CF")"
+
   # The next step, in one wording for the scan, --inspect and the report.
   t_is "next step, nothing installed: the brew command" "1" \
      "$(DEEP_YARA=/no/such DEEP_CLAMSCAN=/no/such deep_next_step | grep -c 'brew install clamav')"

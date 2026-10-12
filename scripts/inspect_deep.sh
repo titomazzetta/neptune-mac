@@ -184,6 +184,33 @@ deep_scan_file() {
   esac
 }
 
+# deep_sed_i — the in-place sed spelling for THIS sed: BSD sed (macOS) needs an
+# empty backup suffix after -i, GNU sed must not get one. Used both to SHOW and
+# to RUN the command, so what the person approves is exactly what runs.
+deep_sed_i() {
+  if sed --version >/dev/null 2>&1; then echo "sed -i"; else echo "sed -i ''"; fi
+}
+
+# deep_conf_steps <conf> — the two commands that turn Homebrew's ClamAV sample
+# config into a real one, as display lines.
+deep_conf_steps() {
+  echo "cp \"$1.sample\" \"$1\""
+  echo "$(deep_sed_i) 's/^Example/#Example/' \"$1\""
+}
+
+# deep_make_freshclam_conf <conf> — run exactly those two commands. Never
+# overwrites a config that exists. Returns non-zero if either step fails.
+deep_make_freshclam_conf() {
+  [ ! -e "$1" ] || return 1
+  [ -f "$1.sample" ] || return 1
+  cp "$1.sample" "$1" || return 1
+  if sed --version >/dev/null 2>&1; then
+    sed -i 's/^Example/#Example/' "$1"
+  else
+    sed -i '' 's/^Example/#Example/' "$1"
+  fi
+}
+
 # deep_update_rules — the SINGLE place in Neptune that reaches the network, and
 # only when the user types --update-rules. It is loud about it: it names every
 # source before touching it. ClamAV's own freshclam updates its signatures (the
@@ -195,7 +222,7 @@ deep_scan_file() {
 #
 # Returns 0 if at least one update path ran, 1 if there was nothing to do.
 deep_update_rules() {
-  local did=1 dir url sum tmp got fc conf yp
+  local did=1 dir url sum tmp got fc conf yp ans
   echo "Updating signatures. This step downloads from the internet; the signature"
   echo "check itself downloads nothing, and nothing here installs software."
   echo
@@ -210,14 +237,32 @@ deep_update_rules() {
     fc=$(command -v freshclam 2>/dev/null || true)
     # Homebrew's ClamAV ships only freshclam.conf.sample, and freshclam refuses
     # to run without the real file. Writing a third-party tool's config is a
-    # change outside ~/.neptune, so Neptune shows the two commands, not runs them.
+    # change outside ~/.neptune, so it happens only the way --fix changes
+    # anything: the exact commands shown, then a y from a person at a terminal.
+    # Never unattended, never by flag.
     conf=""
     [ -n "$fc" ] && conf="$(dirname "$(dirname "$fc")")/etc/clamav/freshclam.conf"
     if [ -n "$conf" ] && [ ! -f "$conf" ] && [ -f "$conf.sample" ]; then
       echo "ClamAV: its updater needs a config file first (Homebrew ships only a"
-      echo "sample). Create it, then run this again:"
-      echo "  cp \"$conf.sample\" \"$conf\""
-      echo "  sed -i '' 's/^Example/#Example/' \"$conf\""
+      echo "sample). These two commands create it:"
+      deep_conf_steps "$conf" | sed 's/^/  /'
+      if [ -t 0 ]; then
+        read -r -p "Run them now? [y/N] " ans
+        case "$ans" in
+          [yY]|[yY][eE][sS])
+            if deep_make_freshclam_conf "$conf"; then
+              echo "  created $conf"
+            else
+              echo "  could not create it; nothing else was changed." >&2
+            fi ;;
+          *) echo "  Nothing changed. Run them yourself, then run this again." ;;
+        esac
+      else
+        echo "Run them, then run this again."
+      fi
+    fi
+    if [ -n "$conf" ] && [ ! -f "$conf" ] && [ -f "$conf.sample" ]; then
+      :   # still no config: freshclam would only fail
     elif [ -n "$fc" ]; then
       echo "ClamAV: freshclam (official ClamAV signature servers)"
       freshclam || echo "  freshclam reported a problem; signatures may be unchanged."
@@ -236,6 +281,10 @@ deep_update_rules() {
     # Detection rules decide what gets called malware, so they come over HTTPS
     # only — including every redirect (--proto) — or not at all.
     case "$url" in
+      *'<'*|*'>'*|*'…'*|*'...'*|'https://'|https://[!a-z0-9]*)
+        echo "YARA rules: \"$url\" looks like the example placeholder, not a real address;" >&2
+        echo "  not downloading. Leave NEPTUNE_YARA_URL unset to use ClamAV alone." >&2
+        return 1 ;;
       https://*) ;;
       *) echo "YARA rules: $url is not an https:// address; not downloading." >&2
          return 1 ;;
@@ -281,9 +330,9 @@ deep_update_rules() {
     # Only when YARA is here to use the rules, or nothing is set up at all; a
     # ClamAV-only Mac does not need a paragraph about YARA on every update.
     echo "YARA rules: no source set. Neptune will not choose a third-party ruleset"
-    echo "for you. Point it at one you trust, pinned to a commit, e.g.:"
-    echo "  NEPTUNE_YARA_URL=https://.../rules.yar \\"
-    echo "  NEPTUNE_YARA_SHA256=<sha256> ./neptune.sh --inspect --update-rules"
+    echo "for you, and ClamAV works without any. To add rules later, set both to a"
+    echo "file you trust (its exact https address, and its sha256) and run this again:"
+    echo "  NEPTUNE_YARA_URL=<address> NEPTUNE_YARA_SHA256=<sha256> ./neptune.sh --inspect --update-rules"
     echo "Rules live in $dir; remove them with: rm -rf $dir"
   fi
   return $did

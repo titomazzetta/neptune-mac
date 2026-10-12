@@ -1285,7 +1285,8 @@ def dig_deeper(report, open_f):
             "ClamAV is installed but has no signatures yet, so it couldn't check anything on "
             "this run. This downloads them, then checks the %s." % what,
             "The first time, Homebrew's ClamAV needs a config file; the command shows the two "
-            "lines that create it and stops, so nothing outside Neptune changes without you. "
+            "lines that create it and asks before running them, so nothing outside Neptune "
+            "changes without your y. "
             + DEEP_NET, DEEP_UNDO)
     elif "yara" in installed:
         add("Give YARA rules to check with", "./neptune.sh --inspect --update-rules", "neptune",

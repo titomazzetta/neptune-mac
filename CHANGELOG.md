@@ -43,7 +43,9 @@ explains each in full — symptom, root cause, fix, and what was learned.
   with the command that fixes it. All flagged files go through one `clamscan`
   run (each run loads the full signature set), read line by line per file.
   `--update-rules` shows the two commands Homebrew's ClamAV needs to create
-  `freshclam.conf` rather than failing vaguely, and never writes it itself.
+  `freshclam.conf` and, at a terminal, asks before running them — the same
+  shown-command-then-y as `--fix`; never unattended, and never over an existing
+  config. A placeholder pasted as the YARA rules address is refused by name.
 
 ### Fixed
 - **`./neptune.sh` from the top folder said "No such file or directory".** Every
