@@ -88,6 +88,8 @@ These are hard rules. Breaking any of them is a regression, even if the code
 ## Repository layout
 
 ```
+neptune.sh       top-level hand-off to scripts/neptune.sh, so ./neptune.sh works from
+                 the repo root too (arguments and exit codes unchanged)
 scripts/         the eleven Neptune scripts, the renderer (neptune_render.py), the
                  extension inspector (neptune_inspect.py), vendor-quirks.tsv,
                  the phrasebook (phrases.tsv), inspect_deep.sh (sourced: the
@@ -191,7 +193,7 @@ CLAUDE.md        this file
   score and records are append-only, so "escalate the finding" can only mean "add
   a record for the same file". A clean sweep is printed but never recorded (a
   clean result must not read as a clearance); a tool that cannot read a file is an
-  `unknown`. A missing tool records nothing and costs nothing. The ONE network
+  `unknown`. A missing tool records nothing and costs nothing. The enrichment's one network
   touch is `deep_update_rules` (behind `--update-rules`): it names every source
   first, uses ClamAV's `freshclam`, and fetches YARA rules only from a
   user-named `NEPTUNE_YARA_URL` — Neptune bakes in no third-party rules source.

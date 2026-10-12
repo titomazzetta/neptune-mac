@@ -51,7 +51,7 @@ NEPTUNE_LIB=1 . scripts/neptune.sh
 t_section "Every script runs in the C locale (DEVLOG Bug 13)"
 ############################################################
 MISSING=""
-for F in scripts/*.sh; do
+for F in neptune.sh scripts/*.sh; do
   grep -q '^export LC_ALL=C' "$F" || MISSING="$MISSING $F"
 done
 t_is "every script exports LC_ALL=C" "" "$MISSING"
@@ -616,6 +616,43 @@ done
 t_is "every scan ends in an explicit exit 0 (a crash is then distinguishable)" "" \
    "$(for S in sentry redflag_scan network_check audit_system check_updates; do
         tail -3 "scripts/$S.sh" | grep -q '^exit 0' || echo "$S"; done)"
+
+############################################################
+t_section "./neptune.sh works from the top folder too (real run, 2026-10)"
+############################################################
+t_is "the top-level neptune.sh is the same program" "$(bash scripts/neptune.sh --version)" "$(./neptune.sh --version)"
+./neptune.sh --no-such-flag >/dev/null 2>&1
+t_is "its exit codes are the real script's (unknown flag: 64)" "64" "$?"
+mkdir -p "$T/elsewhere/bin"
+ln -s "$REPO/neptune.sh" "$T/elsewhere/bin/neptune"
+t_is "a symlink to it, run from another folder, still finds scripts/" "$(bash scripts/neptune.sh --version)" \
+   "$(cd "$T/elsewhere" && ./bin/neptune --version)"
+mkdir -p "$T/stray"; cp neptune.sh "$T/stray/neptune.sh"
+"$T/stray/neptune.sh" --version >/dev/null 2>&1
+t_is "a copy with no scripts/ beside it says so and exits 64" "64" "$?"
+
+############################################################
+t_section "--inspect says what is true (real run, 2026-10)"
+############################################################
+IH="$T/inspect-home"; mkdir -p "$IH/.neptune"
+HOME="$IH" DEEP_YARA=/no DEEP_CLAMSCAN=/no ./neptune.sh --inspect >/dev/null 2>&1
+t_is "never scanned on this version: exit 64 (nothing to re-check)" "64" "$?"
+HOME="$IH" DEEP_YARA=/no DEEP_CLAMSCAN=/no ./neptune.sh --inspect --update-rules >/dev/null 2>&1
+t_is "...but after --update-rules that is not an error: exit 0" "0" "$?"
+: > "$IH/.neptune/last-flagged.tsv"
+EMPTY_OUT=$(HOME="$IH" DEEP_YARA=/no DEEP_CLAMSCAN=/no ./neptune.sh --inspect 2>&1); EMPTY_RC=$?
+t_is "an EMPTY list means the last scan flagged nothing — not 'never scanned'" \
+   "Your last scan flagged no files, so there is nothing to check.|0" "$EMPTY_OUT|$EMPTY_RC"
+if [ "$(id -u)" -ne 0 ]; then
+  touch "$T/ok_helper" "$T/rootonly_helper"; chmod 000 "$T/rootonly_helper"
+  printf '%s\n' "$T/ok_helper" "$T/rootonly_helper" > "$IH/.neptune/last-flagged.tsv"
+  RO=$(HOME="$IH" DEEP_YARA=/no DEEP_CLAMSCAN="$STUBS/clamstub" ./neptune.sh --inspect --out "$T" 2>&1)
+  t_is "a root-only file is skipped and said, never a 'could not inspect' unknown" "1|0" \
+     "$(printf '%s' "$RO" | grep -c 'can only be read by root')|$(printf '%s' "$RO" | grep -c 'could not inspect')"
+  chmod 600 "$T/rootonly_helper"
+else
+  printf '  skip  root-only skip (running as root here; runs on macOS and in CI)\n'
+fi
 
 ############################################################
 t_section "Recorded titles must stand alone"

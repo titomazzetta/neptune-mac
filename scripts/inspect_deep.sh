@@ -97,8 +97,8 @@ deep_next_step() {
   local have
   have=$(deep_tools_present)
   if printf '%s\n' "$have" | grep -qx clamscan; then
-    echo "ClamAV is installed but has no signatures yet. Download them (the one Neptune"
-    echo "step that uses the network), then the flagged files are checked:"
+    echo "ClamAV is installed but has no signatures yet. Download them (this step uses"
+    echo "the internet; the check itself doesn't), then the flagged files are checked:"
     echo "  ./neptune.sh --inspect --update-rules"
   elif printf '%s\n' "$have" | grep -qx yara; then
     echo "YARA is installed but has no rules yet. Point it at a ruleset you trust:"
@@ -195,10 +195,15 @@ deep_scan_file() {
 #
 # Returns 0 if at least one update path ran, 1 if there was nothing to do.
 deep_update_rules() {
-  local did=1 dir url sum tmp got fc conf
-  echo "Updating rules and signatures. This is the only part of Neptune that"
-  echo "reaches the network; everything else is local and read-only."
+  local did=1 dir url sum tmp got fc conf yp
+  echo "Updating signatures. This step downloads from the internet; the signature"
+  echo "check itself downloads nothing, and nothing here installs software."
   echo
+
+  if [ -z "$(deep_tools_present)" ] && [ -z "${NEPTUNE_YARA_URL:-}" ]; then
+    deep_next_step
+    return 1
+  fi
 
   # ClamAV signatures via its own updater.
   if [ -n "$(deep_tool clamscan)" ]; then
@@ -228,11 +233,22 @@ deep_update_rules() {
   url=${NEPTUNE_YARA_URL:-}
   sum=${NEPTUNE_YARA_SHA256:-}
   if [ -n "$url" ]; then
+    # Detection rules decide what gets called malware, so they come over HTTPS
+    # only — including every redirect (--proto) — or not at all.
+    case "$url" in
+      https://*) ;;
+      *) echo "YARA rules: $url is not an https:// address; not downloading." >&2
+         return 1 ;;
+    esac
     mkdir -p "$dir" || return 1
     echo "YARA rules: $url"
-    [ -n "$sum" ] && echo "  expecting sha256 $sum"
+    if [ -n "$sum" ]; then
+      echo "  expecting sha256 $sum"
+    else
+      echo "  not pinned: set NEPTUNE_YARA_SHA256 to refuse anything but that exact file"
+    fi
     tmp="$dir/.neptune.yar.part"
-    if curl -fsSL "$url" -o "$tmp"; then
+    if curl --proto '=https' --tlsv1.2 -fsSL "$url" -o "$tmp"; then
       if [ -n "$sum" ]; then
         got=$(shasum -a 256 "$tmp" 2>/dev/null | awk '{print $1}')
         if [ "$got" != "$sum" ]; then
@@ -241,6 +257,19 @@ deep_update_rules() {
           return 1
         fi
       fi
+      # Rules that do not compile would make every check fail; keep the old ones.
+      # Probed against a one-byte regular file rather than /dev/null, which a
+      # YARA build may refuse to map.
+      yp=$(deep_tool yara)
+      if [ -n "$yp" ]; then
+        printf x > "$dir/.probe"
+        if ! "$yp" "$tmp" "$dir/.probe" >/dev/null 2>&1; then
+          echo "  these rules do not compile with your YARA; not installing (rules unchanged)." >&2
+          rm -f "$tmp" "$dir/.probe"
+          return 1
+        fi
+        rm -f "$dir/.probe"
+      fi
       mv "$tmp" "$dir/neptune.yar"
       echo "  saved to $dir/neptune.yar"
       did=0
@@ -248,7 +277,9 @@ deep_update_rules() {
       echo "  download failed; rules unchanged." >&2
       rm -f "$tmp"
     fi
-  else
+  elif [ -n "$(deep_tool yara)" ] || [ -z "$(deep_tool clamscan)" ]; then
+    # Only when YARA is here to use the rules, or nothing is set up at all; a
+    # ClamAV-only Mac does not need a paragraph about YARA on every update.
     echo "YARA rules: no source set. Neptune will not choose a third-party ruleset"
     echo "for you. Point it at one you trust, pinned to a commit, e.g.:"
     echo "  NEPTUNE_YARA_URL=https://.../rules.yar \\"

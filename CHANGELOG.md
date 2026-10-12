@@ -22,7 +22,7 @@ explains each in full — symptom, root cause, fix, and what was learned.
   never lowers a score — the base scan stays zero-dependency. `--inspect` re-checks
   just the last run's flagged files in seconds without a full re-scan, and when no
   tool is ready it prints the exact `brew install` command rather than installing
-  anything. `--update-rules` is the single, disclosed network touch: it names every
+  anything. `--update-rules` is the only deep-inspection step that uses the network, and it says so: it names every
   source before fetching, runs ClamAV's own `freshclam`, and for YARA fetches only
   a ruleset you name in `NEPTUNE_YARA_URL` (verified against `NEPTUNE_YARA_SHA256`
   when set) — Neptune never bakes in a third-party rules source for you. Rules live
@@ -44,6 +44,28 @@ explains each in full — symptom, root cause, fix, and what was learned.
   run (each run loads the full signature set), read line by line per file.
   `--update-rules` shows the two commands Homebrew's ClamAV needs to create
   `freshclam.conf` rather than failing vaguely, and never writes it itself.
+
+### Fixed
+- **`./neptune.sh` from the top folder said "No such file or directory".** Every
+  hint Neptune prints says `./neptune.sh`, but the script lives in `scripts/`. A
+  top-level `neptune.sh` now hands off to it unchanged (same arguments, same exit
+  codes), and still works through a symlink from anywhere on PATH.
+- **The deep-inspection wording overstated how quiet Neptune is on the network.**
+  Several lines called `--update-rules` "the one part of Neptune that reaches the
+  network". The network check also pings and resolves names, and two other
+  opt-in flags reach third parties ([`SECURITY.md`](SECURITY.md) lists them all).
+  The wording now says only what is true: it is the deep inspection's one
+  network step, and the check itself downloads nothing.
+- **A flagged file only root can read became "could not inspect".** The scanners
+  deliberately run as you, never as root, so such a file is now skipped with a
+  line saying so — not an `unknown` that dropped the verdict to incomplete.
+- **`--inspect` after a scan that flagged nothing** said no scan had been saved;
+  it now says there is nothing to check. After `--update-rules`, it no longer
+  repeats generic advice when the step above it says what to do.
+- **YARA rules download over HTTPS only** (redirects included), and rules that
+  do not compile with your YARA are not installed; the previous ones stay. The
+  YARA paragraph no longer appears on every update of a ClamAV-only Mac, and with
+  nothing installed `--update-rules` points at ClamAV first.
 
 ## [1.3.0] — 2026-10-12
 

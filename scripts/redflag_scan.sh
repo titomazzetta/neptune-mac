@@ -193,21 +193,32 @@ already_flagged() { printf '%s\n' "$FLAGGED_BINS" | grep -qxF "$1"; }
 # "add an attention record for the same file". Both lines then show — the file
 # was flagged for being unsigned AND it matches a signature — which is honest.
 deep_enrich() {
-  local ENR RULES FILE FILES TOOL VERD YP CP TAB DEEPOUT="" HITS=0
+  local ENR RULES FILE FILES TOOL VERD YP CP TAB DEEPOUT="" HITS=0 ROOTONLY=0
   local -a EXIST
   EXIST=()
   ENR=$(deep_enrichers)
   if [ -z "$ENR" ]; then deep_offer_install; return 0; fi
   FILES=$(printf '%s\n' "$FLAGGED_BINS" | awk 'NF && !seen[$0]++ && /^\//')
+  # The scanners run as you, never as root: a malware scanner is a parser of
+  # hostile input, and feeding it a suspicious file with root rights is a risk
+  # of its own. A file only root can read is therefore not scanned — and that is
+  # said, not recorded: an optional corroboration that could not read a file is
+  # not a Neptune check that failed, and must not drop the verdict to incomplete.
   while IFS= read -r FILE; do
-    [ -n "$FILE" ] && [ -f "$FILE" ] && EXIST+=("$FILE")
+    [ -n "$FILE" ] && [ -f "$FILE" ] || continue
+    if [ -r "$FILE" ]; then EXIST+=("$FILE"); else ROOTONLY=$((ROOTONLY + 1)); fi
   done <<FLAGGEDFILES
 $FILES
 FLAGGEDFILES
-  [ ${#EXIST[@]} -gt 0 ] || return 0
+  [ ${#EXIST[@]} -gt 0 ] || [ "$ROOTONLY" -gt 0 ] || return 0
   TAB=$(printf '\t')
   CHECK=malware-signature
   section "Deep inspection (optional)"
+  if [ "$ROOTONLY" -gt 0 ]; then
+    note "$ROOTONLY flagged file(s) can only be read by root and were not scanned (Neptune"
+    note "never runs a scanner as root on a suspicious file). They stay flagged as they are."
+  fi
+  [ ${#EXIST[@]} -gt 0 ] || return 0
   note "Checking the ${#EXIST[@]} file(s) flagged above against known-malware signatures."
   # Results collect as tool<TAB>file<TAB>verdict, then are recorded in this
   # shell (a heredoc, not a pipe) so flag() still reaches the summary.

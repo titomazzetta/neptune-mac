@@ -538,11 +538,11 @@ neptune.sh — run the Neptune scans, then report a verdict and scores.
                                   a full re-scan. Optional; a missing tool just
                                   means this does nothing and costs no points.
   ./neptune.sh --inspect --update-rules
-                                  first update signatures — the ONE part of
-                                  Neptune that reaches the network: ClamAV's
-                                  freshclam, and YARA rules only from a source you
-                                  name (NEPTUNE_YARA_URL). Nothing is fetched or
-                                  installed on its own.
+                                  first update signatures. This downloads from
+                                  the internet: ClamAV's freshclam, and YARA rules
+                                  only from a source you name (NEPTUNE_YARA_URL).
+                                  The check itself downloads nothing, and nothing
+                                  is ever fetched or installed on its own.
   ./neptune.sh --version
 
 Acknowledged findings stay listed and stay counted — they only stop deducting
@@ -726,13 +726,26 @@ if $UPDATE_RULES; then
 fi
 if $INSPECT; then
   LAST_FLAGGED="$NEPTUNE_HOME/last-flagged.tsv"
+  # Three different situations, three different answers. An EMPTY list is not
+  # "never scanned": it is a scan that flagged no files, so there is nothing to do.
+  if [ ! -e "$LAST_FLAGGED" ]; then
+    echo "Nothing to re-check yet: no scan has saved its flagged files (they are saved" >&2
+    echo "from this version on). Run ./neptune.sh — with a scanner ready, the full scan" >&2
+    echo "checks the flagged files itself, and --inspect can re-check them after that." >&2
+    if $UPDATE_RULES; then exit 0; else exit 64; fi
+  fi
   if [ ! -s "$LAST_FLAGGED" ]; then
-    echo "Nothing to inspect yet: no flagged files were saved from a previous run." >&2
-    echo "Run ./neptune.sh first; --inspect then re-checks just what it flagged." >&2
-    exit 64
+    echo "Your last scan flagged no files, so there is nothing to check."
+    exit 0
   fi
   if [ -z "$(deep_enrichers)" ]; then
-    deep_next_step >&2
+    if $UPDATE_RULES; then
+      # The update just ran and printed what it needs; repeating the general
+      # advice here would send the person round in a circle.
+      echo "Nothing can check the files yet. Finish the step shown above, then run this again." >&2
+    else
+      deep_next_step >&2
+    fi
     exit 64
   fi
   OUT_DIR="${OUT_DIR:-$HOME/Desktop}"

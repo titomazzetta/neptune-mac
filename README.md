@@ -135,6 +135,10 @@ laptop. (A browser download adds macOS's quarantine flag; clear it with
 git clone https://github.com/titomazzetta/neptune-mac.git && cd neptune-mac/scripts
 ```
 
+The scripts live in `scripts/`, and every command Neptune prints assumes you are
+there. `./neptune.sh` also works from the top folder: it hands off to
+`scripts/neptune.sh` unchanged.
+
 **Do not run anything with `sudo`** — every script refuses, and asks for
 privileges itself only where it needs them.
 
@@ -266,9 +270,10 @@ files, never a whole-disk scan. A signature match becomes a finding to verify
 first; a clean result is reassurance, not a clearance; a missing tool changes
 nothing and costs no points. `./neptune.sh --inspect` re-checks just the last
 run's flagged files in seconds. `./neptune.sh --inspect --update-rules` updates
-signatures — the one part of Neptune that reaches the network: ClamAV's own
-`freshclam`, and YARA rules only from a source you name (`NEPTUNE_YARA_URL`),
-because Neptune won't pick a third-party ruleset for you. Rules live in
+signatures, which downloads from the internet: ClamAV's own `freshclam`, and
+YARA rules only from a source you name (`NEPTUNE_YARA_URL`), because Neptune
+won't pick a third-party ruleset for you. Nothing else in the deep inspection
+uses the network. Rules live in
 `~/.neptune/yara`; delete that folder to remove them. When something is flagged,
 the report's Recommended commands say which of these steps fits your Mac.
 

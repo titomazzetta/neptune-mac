@@ -894,7 +894,7 @@ FLAGS = {
     ("neptune.sh", "--only"): "just these item numbers, in this order",
     ("neptune.sh", "--acknowledge"): "mark these items as known; they stay listed and stop costing points",
     ("neptune.sh", "--inspect"): "check only the files the last run flagged against malware signatures, if a scanner is installed; reads, changes nothing",
-    ("neptune.sh", "--update-rules"): "first download fresh signatures: the one Neptune step that uses the internet, and it names each source before it goes",
+    ("neptune.sh", "--update-rules"): "first download fresh signatures from the internet, naming each source before it goes",
 }
 
 
@@ -1243,10 +1243,10 @@ def playbook(report):
 DEEP_CHECKS = ("persistence-launchd", "privileged-helpers", "process-hidden", "process-root",
                "listeners", "malware-signature")
 DEEP_NAMES = {"yara": "YARA", "clamscan": "ClamAV"}
-DEEP_NET = ("Updating is the one Neptune step that uses the internet: ClamAV's own updater, "
-            "and YARA rules only from the address you set in NEPTUNE_YARA_URL. It names each "
-            "source before it goes. A match is a lead to verify first, not proof; no match is "
-            "reassurance, not a clearance.")
+DEEP_NET = ("Updating downloads from the internet: ClamAV's own updater, and YARA rules only "
+            "from the address you set in NEPTUNE_YARA_URL. It names each source before it goes; "
+            "the check itself downloads nothing. A match is a lead to verify first, not proof; "
+            "no match is reassurance, not a clearance.")
 DEEP_UNDO = ("Neptune saves only YARA rules you pointed it at, in ~/.neptune/yara: delete that "
              "folder to remove them. ClamAV's signatures live with ClamAV; brew uninstall clamav "
              "removes both.")
@@ -1643,7 +1643,8 @@ def render_html(report):
     plays = playbook(report)
     add("<section><h2>Recommended commands</h2><p class=\"sub\">The handful of commands that "
         "apply to this Mac right now. Open one to see what it does; switch to Technical for "
-        "every part of it. Run them from the Neptune <code>scripts</code> folder.</p>"
+        "every part of it. Run them from the Neptune <code>scripts</code> folder; "
+        "<code>./neptune.sh</code> also works from the top folder.</p>"
         "<div class=\"panel plays\">")
     for pl in plays:
         add("<details class=\"play\"><summary><span><span class=\"ttl\">%s</span>"

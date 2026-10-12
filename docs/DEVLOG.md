@@ -1314,6 +1314,25 @@ Homebrew's ClamAV refuses to update until `freshclam.conf` exists, so
 `--update-rules` shows the two commands that create it. Lesson, again: run the
 real tool on the path you tell people to take, not just a stub of it.
 
+### Bug 25 — what the first real `--inspect` run found
+
+Tito installed ClamAV and ran `./neptune.sh --inspect --update-rules` from the
+top of the repository — and got `No such file or directory`, because every hint
+says `./neptune.sh` and the script lives in `scripts/`. A top-level hand-off
+script fixes the entry point; the other scripts still run from `scripts/`, as the
+report says.
+
+Walking the rest of that path turned up four more. The update banner said it was
+"the only part of Neptune that reaches the network; everything else is local" —
+false (the network check pings and resolves; two opt-in flags reach third
+parties), and the worst kind of false for a tool whose premise is that it does
+not overstate. A root-only flagged file became an `unknown`, letting an optional
+tool drag the verdict to incomplete. An empty flagged-file list read as "never
+scanned". And YARA rules could arrive over plain HTTP or fail to compile and be
+installed anyway, which would have turned every YARA check into an error. Each
+is fixed with a test; the root-only case is tested where the suite runs as a
+normal user (macOS and CI), since root reads everything.
+
 ## Where it's going
 
 See `ROADMAP.md`. The next gap is login items registered through
