@@ -11,6 +11,11 @@ explains each in full — symptom, root cause, fix, and what was learned.
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-10-12
+
+Updates you can act on, app by app, and two fixes from real runs on a second
+Mac (the python finder and the App Store check).
+
 ### Added
 - **Updates, app by app** in the HTML report, the JSON (`software`) and the AI
   brief. `check_updates.sh` already knew which apps were behind; the report only
