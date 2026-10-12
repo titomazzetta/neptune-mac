@@ -57,6 +57,11 @@ Removed deliberately, so they stop reading as debt:
 
 ## Done
 
+**v1.3.0** — the report now lists updates app by app (what has a newer
+version and whether Homebrew, Apple, the App Store or the app itself updates it),
+plus two fixes from a second Mac: pick the first python3 that actually runs, and
+treat a `mas` that cannot run as "could not check" instead of "up to date".
+
 **v1.2.0** — a voice and a report people can read: plain-words headlines from
 one phrasebook, a one-screen terminal summary, an HTML report with an
 explanation ladder (Simple / Detailed / Technical) and recommended commands,
