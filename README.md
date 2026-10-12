@@ -277,6 +277,19 @@ uses the network. Rules live in
 `~/.neptune/yara`; delete that folder to remove them. When something is flagged,
 the report's Recommended commands say which of these steps fits your Mac.
 
+Setting up ClamAV on a Mac, once:
+
+1. `brew install clamav`. Ignore Homebrew's suggestion to start `clamd` or
+   `brew services start clamav`: that is a resident background scanner, and
+   Neptune does not use it. It runs `clamscan` on demand, on the flagged files.
+2. `./neptune.sh --inspect --update-rules`. The first time, it shows the two
+   commands that create ClamAV's config file and asks before running them; then
+   it downloads the signatures (about 110 MB). Homebrew's ClamAV may print
+   `ERROR: NULL X509 store` along the way — a known upstream message; what
+   matters is `Database test passed` and Neptune's line after it.
+3. `./neptune.sh`. Every scan now checks the flagged files. Signatures change
+   daily; run step 2 again now and then to refresh them.
+
 **Reading the results.** A flag is a lead, not a verdict. [`docs/reading-reports.md`](docs/reading-reports.md)
 covers telling a real finding from a vendor habit.
 [`docs/sample-report.txt`](docs/sample-report.txt) is a real run, sanitized.

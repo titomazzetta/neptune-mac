@@ -265,7 +265,15 @@ deep_update_rules() {
       :   # still no config: freshclam would only fail
     elif [ -n "$fc" ]; then
       echo "ClamAV: freshclam (official ClamAV signature servers)"
-      freshclam || echo "  freshclam reported a problem; signatures may be unchanged."
+      # Homebrew's ClamAV can print "ERROR: NULL X509 store" during a download
+      # that then succeeds (upstream Cisco-Talos/clamav#1421, cause unknown), so
+      # the exit status is what decides, and Neptune says it in plain words.
+      if freshclam; then
+        echo "  ClamAV's signatures are updated, and freshclam tested them. Any"
+        echo "  'NULL X509 store' lines above are a known Homebrew ClamAV message."
+      else
+        echo "  freshclam reported a problem; signatures may be unchanged. Run this again."
+      fi
       did=0
     else
       echo "ClamAV is installed but freshclam is not on PATH; skipping signature update."

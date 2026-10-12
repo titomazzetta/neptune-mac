@@ -219,7 +219,11 @@ FLAGGEDFILES
     note "never runs a scanner as root on a suspicious file). They stay flagged as they are."
   fi
   [ ${#EXIST[@]} -gt 0 ] || return 0
-  note "Checking the ${#EXIST[@]} file(s) flagged above against known-malware signatures."
+  if [ "${NEPTUNE_INSPECT_ONLY:-}" = "1" ]; then
+    note "Checking the ${#EXIST[@]} file(s) your last scan flagged against known-malware signatures."
+  else
+    note "Checking the ${#EXIST[@]} file(s) flagged above against known-malware signatures."
+  fi
   # Results collect as tool<TAB>file<TAB>verdict, then are recorded in this
   # shell (a heredoc, not a pipe) so flag() still reaches the summary.
   if printf '%s\n' "$ENR" | grep -qx yara; then
