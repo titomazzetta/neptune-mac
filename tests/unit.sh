@@ -191,6 +191,15 @@ t_section "check_updates.sh — softwareupdate parser and timeout"
   NEPTUNE_LIB=1 . scripts/check_updates.sh >/dev/null 2>&1
   t_is "brew counts read as words" "1 formula and 2 casks|3 formulae|1 cask" \
      "$(brew_counts 1 2)|$(brew_counts 3 0)|$(brew_counts 0 1)"
+  t_is "brew outdated --verbose: name, installed, latest; newest of several kept" \
+     "wget|1.21.3|1.21.4 python@3.12|3.12.6|3.12.7 firefox|118.0|119.0" \
+     "$(printf 'wget (1.21.3) < 1.21.4\npython@3.12 (3.12.5, 3.12.6) < 3.12.7\nfirefox (118.0) != 119.0\n' | brew_rows | tr '\t' '|' | tr '\n' ' ' | sed 's/ $//')"
+  t_is "mas outdated: a name with spaces and its two versions" "Final Cut Pro|10.7|10.8" \
+     "$(printf '424389933  Final Cut Pro  (10.7 -> 10.8)\n' | mas_rows | tr '\t' '|')"
+  INVF="$T/inv.tsv"; : > "$INVF"
+  NEPTUNE_INVENTORY="$INVF" inv brew-cask "Visual Studio Code" "1.92" "1.93" "visual-studio-code"
+  inv brew-cask "not written" "" "" ""     # no NEPTUNE_INVENTORY: writes nothing
+  t_is "inv writes one row only when asked" "1" "$(grep -c . "$INVF")"
   P=$(su_parse 26 < "$FIX/softwareupdate-2026-09-18.txt")
   t_is "minor updates are updates" "Safari 27.0|macOS Tahoe 26.7" \
      "$(printf '%s\n' "$P" | awk -F'\t' '$1=="update"{print $3}' | tr '\n' '|' | sed 's/|$//')"

@@ -491,6 +491,69 @@ class Ladder(unittest.TestCase):
         self.assertEqual(waves["gains"], [("Security", 8)])
 
 
+class SoftwareInventory(unittest.TestCase):
+    """Updates, app by app: every outdated thing in one group that says how it
+    is updated, and an app Neptune could not compare is never shown as current."""
+
+    SOFTWARE = [
+        {"kind": "brew-formula", "name": "wget", "installed": "1.21.3", "latest": "1.21.4", "hint": "wget"},
+        {"kind": "brew-cask", "name": "firefox", "installed": "118.0", "latest": "119.0", "hint": "firefox"},
+        {"kind": "app-behind", "name": "Audacity", "installed": "3.7.8", "latest": "3.7.9", "hint": "audacity"},
+        {"kind": "app-store", "name": "Final Cut Pro", "installed": "10.7", "latest": "10.8", "hint": ""},
+        {"kind": "apple", "name": "Safari 27.0", "installed": "", "latest": "", "hint": "Safari27.0-27.0"},
+        {"kind": "app-current", "name": "Zoom", "installed": "6.1", "latest": "6.1", "hint": "zoom"},
+        {"kind": "app-unchecked", "name": "SoundID Reference", "installed": "5.9", "latest": "", "hint": ""},
+    ]
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp(prefix="neptune-inv-")
+        src = os.path.join(cls.tmp, "run.json")
+        with open(src, "w", encoding="utf-8") as fh:
+            json.dump({"findings": [{"severity": "notice", "category": "maintenance", "scan": "updates",
+                                     "check": "brew-outdated",
+                                     "title": "Homebrew has updates for 1 formula and 1 cask"}],
+                       "checks_passed": [], "software": cls.SOFTWARE}, fh)
+        out = os.path.join(cls.tmp, "out")
+        cls.proc = run(["bash", "scripts/neptune.sh", "--replay", src, "--html", "--json", "--out", out],
+                       env={"HOME": cls.tmp})
+        with open(os.path.join(out, "neptune_report_replay.html"), encoding="utf-8") as fh:
+            cls.html = fh.read()
+        with open(os.path.join(out, "neptune_findings_replay.json"), encoding="utf-8") as fh:
+            cls.report = json.load(fh)
+        with open(os.path.join(out, "neptune_ai_brief_replay.md"), encoding="utf-8") as fh:
+            cls.brief = fh.read()
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def test_the_inventory_survives_a_json_round_trip(self):
+        self.assertEqual(self.report["software"], self.SOFTWARE, self.proc.stdout)
+
+    def test_each_kind_lands_in_its_group_with_its_route(self):
+        for want in ("Updates, app by app", "Homebrew can update these", "Apple updates",
+                     "Mac App Store", "Update these from the app itself",
+                     "./check_updates.sh --upgrade", "mas upgrade",
+                     "brew install --cask --adopt audacity", "brew upgrade wget",
+                     "3.7.8 &rarr; 3.7.9"):
+            self.assertIn(want, self.html, want)
+
+    def test_an_app_that_could_not_be_compared_is_never_current(self):
+        self.assertIn("check these yourself", self.html)
+        self.assertIn("SoundID Reference", self.html)
+        self.assertIn("1 app that updates itself is on the latest version", self.html)
+        self.assertIn("Not comparable (no catalog entry), so their status is unknown: SoundID Reference", self.brief)
+
+    def test_every_route_command_is_explained(self):
+        for _k, _t, _h, cmd, _kind, item in R.SOFTWARE_GROUPS:
+            for c in filter(None, (cmd, item.format(name="wget", hint="audacity"))):
+                self.assertTrue(R.explain_command(c), c)
+
+    def test_no_section_without_an_inventory(self):
+        self.assertEqual(R.software_html(lambda x: x, []), "")
+
+
 class JsonToRecords(unittest.TestCase):
 
     def test_round_trip_escapes_separators(self):

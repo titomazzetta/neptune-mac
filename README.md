@@ -71,7 +71,9 @@ step. Every run also writes, when python3 is available:
 - **an HTML report** that opens with the verdict, a two-line synopsis and the
   scores, then *Protection at a glance* (each control checked, not assumed),
   *Do these next* ranked by what each is worth, the handful of *Recommended
-  commands* that apply to this Mac, and every finding explained on a ladder —
+  commands* that apply to this Mac, *Updates, app by app* (what has a newer
+  version and whether Homebrew, Apple, the App Store or the app itself
+  updates it), and every finding explained on a ladder —
   **Simple / Detailed / Technical** — down to what each part of each command
   does and how to undo it. No JavaScript, no network requests when opened; CI
   asserts both.
