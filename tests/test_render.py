@@ -436,6 +436,71 @@ class Phrasebook(unittest.TestCase):
                 self.assertEqual(f["headline"], phrase_py(self.rows, f["check"], f["title"]), f["title"])
 
 
+class Enrichment(unittest.TestCase):
+    """Optional deep inspection (yara/clamav). A signature hit is a scored
+    attention finding; a tool that could not read a file is an unknown, not a
+    pass; and the one network touch lives only in deep_update_rules."""
+
+    def setUp(self):
+        self.rows = load_phrases()
+
+    def _replay(self, records):
+        out = tempfile.mkdtemp()
+        try:
+            fx = os.path.join(out, "f.txt")
+            with open(fx, "w", encoding="utf-8") as fh:
+                fh.write(records)
+            run(["bash", "scripts/neptune.sh", "--replay", fx, "--json", "--out", out],
+                env={"HOME": out})
+            with open(os.path.join(out, "neptune_findings_replay.json"), encoding="utf-8") as fh:
+                return json.load(fh)
+        finally:
+            shutil.rmtree(out, ignore_errors=True)
+
+    def test_a_signature_hit_reads_and_scores_as_attention(self):
+        rep = self._replay(
+            "attention|security|redflag|malware-signature|"
+            "YARA signature match on a flagged file: OSX_Backdoor (/Library/Foo/bar)\n")
+        f = rep["findings"][0]
+        self.assertEqual(f["severity"], "attention")
+        self.assertEqual(f["headline"],
+                         "A flagged file matches a known-malware signature: OSX_Backdoor")
+        self.assertEqual(f["headline"], phrase_py(self.rows, f["check"], f["title"]))
+        # The advice says verify, not wipe; and it points a command at the file.
+        adv = f["advice"]
+        self.assertIn("verify", (adv["means"] + adv["do"]).lower())
+        self.assertTrue(any("/Library/Foo/bar" in c["command"] for c in adv["commands"]),
+                        adv["commands"])
+
+    def test_a_tool_that_could_not_read_a_file_is_unknown_not_pass(self):
+        rep = self._replay(
+            "unknown|security|redflag|malware-signature|"
+            "ClamAV could not inspect /Library/Foo/bar\n")
+        f = rep["findings"][0]
+        self.assertEqual(f["severity"], "unknown")
+        self.assertEqual(f["headline"], phrase_py(self.rows, f["check"], f["title"]))
+        # An unknown is advised as could-not-check, never as the failure state.
+        self.assertNotIn("matches a known-malware", f["advice"].get("means", ""))
+
+    def test_only_update_rules_touches_the_network(self):
+        """The base scan and the enrichment pass stay network-silent: the only
+        references to curl/wget/freshclam/http live inside deep_update_rules, and
+        redflag's enrichment pass has none at all."""
+        net = re.compile(r"\b(curl|wget|freshclam)\b|https?://")
+        with open(os.path.join(SCRIPTS, "inspect_deep.sh"), encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+        start = next(i for i, l in enumerate(lines) if l.startswith("deep_update_rules()"))
+        end = next(i for i in range(start + 1, len(lines)) if lines[i] == "}")
+        offenders = [(i + 1, l) for i, l in enumerate(lines)
+                     if net.search(l) and not (start <= i <= end)
+                     and not l.lstrip().startswith("#")]
+        self.assertEqual(offenders, [], "network outside deep_update_rules")
+        with open(os.path.join(SCRIPTS, "redflag_scan.sh"), encoding="utf-8") as fh:
+            rf = [(i + 1, l) for i, l in enumerate(fh.read().splitlines())
+                  if net.search(l) and not l.lstrip().startswith("#")]
+        self.assertEqual(rf, [], "redflag_scan.sh must never touch the network")
+
+
 class Ladder(unittest.TestCase):
     """The explanation ladder: every rung exists for every check, and every
     command the report can show has every part of it explained."""

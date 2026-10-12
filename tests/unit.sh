@@ -335,6 +335,47 @@ HOME="$T/nofix" ./scripts/fix.sh --plan >/dev/null 2>&1
 t_is "no saved run yet: exit 64" "64" "$?"
 
 ############################################################
+t_section "inspect_deep.sh — optional enrichment (yara/clamav)"
+############################################################
+(
+  export HOME="$T/home-di"; export NEPTUNE_HOME="$HOME/.neptune"
+  mkdir -p "$NEPTUNE_HOME/yara"
+  # shellcheck source=/dev/null
+  NEPTUNE_LIB=1 . scripts/inspect_deep.sh >/dev/null 2>&1
+
+  # classify yara: exit is always 0, so output is what tells a hit from a clean.
+  t_is "yara: output is a hit, first token is the rule" "hit:Evil_Rule" "$(deep_classify_yara 0 'Evil_Rule /some/file')"
+  t_is "yara: no output is clean"                        "clean"        "$(deep_classify_yara 0 '')"
+  t_is "yara: a non-zero exit is an error"               "err"          "$(deep_classify_yara 2 '')"
+  # classify clamscan: 0 clean, 1 infected (signature parsed), else error.
+  t_is "clamav: exit 1 is a hit, signature parsed" "hit:Eicar-Test-Signature" "$(deep_classify_clam 1 '/x/f: Eicar-Test-Signature FOUND')"
+  t_is "clamav: exit 0 is clean"                   "clean"                     "$(deep_classify_clam 0 '')"
+  t_is "clamav: any other exit is an error"        "err"                       "$(deep_classify_clam 2 'broke')"
+
+  # a stub that "runs": --version succeeds, a path with 'evil' matches.
+  cat > "$STUBS/yarastub" <<'STUB'
+#!/bin/bash
+[ "$1" = "--version" ] && { echo 4.5.0; exit 0; }
+case "$2" in *evil*) echo "OSX_Backdoor $2"; exit 0 ;; *) exit 0 ;; esac
+STUB
+  chmod +x "$STUBS/yarastub"
+  t_is "deep_tool uses the DEEP_ override when it is executable" "$STUBS/yarastub" "$(DEEP_YARA="$STUBS/yarastub" deep_tool yara)"
+  t_is "deep_tool is empty when the override points at nothing"  ""               "$(DEEP_YARA=/no/such/thing deep_tool yara)"
+
+  # yara counts as an enricher only once it has rules.
+  t_is "no rules yet: yara is not an enricher"   "" "$(DEEP_YARA="$STUBS/yarastub" deep_enrichers)"
+  echo 'rule X { condition: true }' > "$NEPTUNE_HOME/yara/neptune.yar"
+  t_is "with rules: yara is an enricher"          "yara" "$(DEEP_YARA="$STUBS/yarastub" deep_enrichers)"
+
+  touch "$T/evil.bin" "$T/good.bin"
+  RULES=$(deep_yara_rules)
+  t_is "scan: a matching file is a hit with the rule" "hit:OSX_Backdoor" "$(deep_scan_file yara "$STUBS/yarastub" "$T/evil.bin" "$RULES")"
+  t_is "scan: a non-matching file is clean"           "clean"            "$(deep_scan_file yara "$STUBS/yarastub" "$T/good.bin" "$RULES")"
+  t_is "scan: a missing file is absent, not a hit"    "absent"           "$(deep_scan_file yara "$STUBS/yarastub" "$T/gone.bin" "$RULES")"
+  t_is "scan: yara with no rules is absent"           "absent"           "$(deep_scan_file yara "$STUBS/yarastub" "$T/evil.bin" '')"
+)
+
+############################################################
 t_section "Every scan's record() writes one well-formed line"
 ############################################################
 for S in sentry redflag_scan network_check audit_system check_updates; do

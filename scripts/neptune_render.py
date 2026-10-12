@@ -453,6 +453,17 @@ REMEDIATION = [
      "receiving network traffic right now.",
      "Match it to software you installed. If you cannot, that is the finding to chase first.",
      _codesign),
+    (("malware-signature",), r"signature match on a flagged file",
+     "A file that was already flagged — it starts at login, listens, or runs from an "
+     "odd place — also matches a known-malware signature in your YARA or ClamAV rules. "
+     "That is strong corroboration, not proof: signatures produce false positives, and "
+     "a match on a legitimate vendor binary can still be a bad or over-broad rule.",
+     "Treat it as the thing to verify first, not a reason to wipe. Identify what the "
+     "file is and what starts it. If it belongs to software you installed and the rule "
+     "is a known false positive, you can keep it — but confirm that first. If you cannot "
+     "place it, isolate it: move its launch item to the Trash (reversible) and keep the "
+     "file itself for analysis before deleting anything.",
+     lambda t: _codesign(t) + _plist(t) + _uninstall(t)),
     (("baseline-diff:info",), r"^Baseline (created|re-established|format changed)",
      "Neptune set up or replaced its change-detection baseline on this run, so there "
      "was nothing to compare against yet.",
@@ -749,6 +760,7 @@ SHORT = {
     "process-root": "A program running with full admin rights isn't signed by its maker.",
     "listeners": "Some programs are waiting for connections from other machines.",
     "network-signing": "A program that's online isn't signed by its maker.",
+    "malware-signature": "A file that was already flagged also matches a known-malware signature — a strong lead to check, not proof on its own.",
     "baseline-diff": "Something appeared since your last known-good snapshot.",
     "baseline-gone": "Some things from your last snapshot are no longer there.",
     "proxy": "Your web traffic is being routed through a proxy.",

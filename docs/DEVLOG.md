@@ -1258,6 +1258,44 @@ that could not run must never look like a check that found nothing.
   (including a non-technical user's), which is where Bug 4 surfaced. Lab-only
   testing would have shipped it.
 
+## Optional deep inspection — corroborate, never depend
+
+Added `inspect_deep.sh`: when `yara` or `clamscan` is present, Neptune scans the
+files it already flagged against known-malware signatures. Two decisions were
+forced by the architecture, and both are worth recording because they are the
+kind of thing a reviewer will poke at.
+
+**A hit is a new record, not a mutation of the finding it corroborates.** The
+proposal (`claude/PR-6-optional-enrichment.md`) described enrichment as
+"attached to the existing finding". But in this pipeline a *record* is the only
+thing that moves the score, and records are append-only — a scan emits a line and
+never edits one. So "a hit escalates the finding" can only be implemented as "a
+hit adds an `attention` record for the same file" (`CHECK=malware-signature`).
+Both lines then show: the file was flagged for being unsigned *and* it matches a
+signature. That is honest, and it keeps the fail-closed, record-drives-score
+contract intact. Threading an `enrichment` object through the awk scorer and the
+Python renderer would have been the only other way, and it would have meant
+rewriting the scoring contract for a corroborating signal — not worth it. A clean
+sweep is printed but recorded as *nothing*: a clean result must never read, in
+the report, as if it cleared the items it scanned. A tool that cannot read a file
+is an `unknown`, not a pass.
+
+**The file paths came from `FLAGGED_BINS`, not from parsing titles.** The first
+cut parsed the flagged finding *titles* with awk to recover paths — and used
+`match(line, /re/, m)`, a GNU-awk extension that silently does nothing on the
+BWK awk macOS ships (DEVLOG's recurring lesson). The fix was to stop parsing
+prose at all: `redflag_scan.sh` already keeps every flagged binary in
+`FLAGGED_BINS`, one real path per line, so the enrichment pass reads that
+directly. The clean path list it needed already existed; the parser was a
+bug waiting to happen on the target platform.
+
+**The network stays one disclosed touch.** `--update-rules` is the only path
+that reaches out: ClamAV's own `freshclam`, and YARA rules only from a
+user-named `NEPTUNE_YARA_URL`. Neptune does not bake in a third-party rules
+source — baking an unverified external source into a security tool is the exact
+thing the tool warns about. A test asserts `curl`/`wget`/`freshclam`/`http` live
+only inside `deep_update_rules`, and nowhere in `redflag_scan.sh`.
+
 ## Where it's going
 
 See `ROADMAP.md`. The next gap is login items registered through

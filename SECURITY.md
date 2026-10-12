@@ -26,9 +26,14 @@ the scripts:
 | ARP sweep of your own subnet | your LAN | `netcheck_plus.sh` device census |
 | HTTPS to `api.ipify.org` | third party | **only** with `network_check.sh --public-ip` |
 | HTTPS to `speed.cloudflare.com` (up to 100 MB, 8 s cap) | third party | **only** with `netcheck_plus.sh --load` |
+| `freshclam` (ClamAV's own signature servers) | third party | **only** with `./neptune.sh --update-rules`, and only if ClamAV is installed |
+| HTTPS to the URL in `NEPTUNE_YARA_URL` (if you set it) | a source *you* name | **only** with `./neptune.sh --update-rules` |
 
-The last two are opt-in and off unless you pass the flag. Everything else is your
-own network and the same public DNS resolver your machine already uses.
+The last four are opt-in and off unless you pass the flag. Everything else is your
+own network and the same public DNS resolver your machine already uses. Neptune
+does not bake in a YARA rules source: `--update-rules` fetches rules only from a
+URL you set in `NEPTUNE_YARA_URL` (verified against `NEPTUNE_YARA_SHA256` when you
+set one), so the one third party reached for rules is one you chose.
 
 `check_updates.sh` invokes `softwareupdate`, `brew` and `mas` if installed. Those
 are Apple's and Homebrew's own tools making their own normal network requests —
@@ -42,17 +47,23 @@ To confirm all of the above yourself:
 grep -rnE '\bcurl\b|\bwget\b|https?://' scripts/
 ```
 
-That returns three places, and you should expect all three:
+That returns four places, and you should expect all four:
 
 - `network_check.sh` — the `api.ipify.org` lookup, inside `if $PUBLIC_IP`.
 - `netcheck_plus.sh` — the Cloudflare speed-test download (two lines, one
   command), inside `if $LOAD`. It checks that the download actually happened
   and discards the result if not, rather than reporting "no bufferbloat" from a
   test that never loaded the link.
+- `inspect_deep.sh` — the `curl` that fetches YARA rules and the example
+  `https://` in the help text, both inside `deep_update_rules`, which runs only
+  with `--update-rules`. That function also calls `freshclam` (ClamAV's own
+  updater); `grep -n freshclam scripts/inspect_deep.sh` shows it lives there and
+  nowhere else. The enrichment scan itself (`yara`/`clamscan` against already-
+  flagged files) makes no network call.
 - `check_updates.sh` — **not a network call.** It prints `https://brew.sh` as
   text when Homebrew is missing. Nothing fetches it.
 
-If you ever find a fourth, something has changed that this document does not
+If you ever find a fifth, something has changed that this document does not
 describe.
 
 ---

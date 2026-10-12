@@ -95,7 +95,7 @@ each one is enforced by a test, not a promise:
 | **Ad-hoc signed is not "signed."** A valid signature with no developer identity — what commodity Mac malware ships with — is its own class, not a pass ([Bug 16](docs/DEVLOG.md)). | Five-class `sig()` tested against captured `codesign` output and a binary CI signs ad hoc itself |
 | **A fix runs only as shown.** `--fix` offers one fix per finding with its exact command and waits for `y`; commands run without `eval` or globbing; the fixer itself deletes nothing and logs what it applied. | `tests/unit.sh` "fix.sh" section: every check id has a plan, no command contains a pipe/chain/substitution, no `rm`/`eval` in the fixer |
 | **Advice is looked up, never generated.** Every command in the report is one you can find in `man` or Apple's docs, or is Neptune's own; none is a pipeline; an unknown gets "could not check" advice, not the fix for a failure. | `tests/test_render.py` checks every command, every check id, and every `./script --flag` the report tells you to run |
-| **Nothing leaves the machine.** Two opt-in flags reach the internet; nothing else does. Homebrew is run with its analytics off. | [`SECURITY.md`](SECURITY.md) gives the one `grep` that proves it |
+| **Nothing leaves the machine.** Only a handful of opt-in flags reach the internet (a public-IP lookup, a speed test, and `--update-rules` for signatures); nothing else does. Homebrew is run with its analytics off. | [`SECURITY.md`](SECURITY.md) gives the one `grep` that proves it |
 | **Releases are verifiable.** Built in CI from the tag, with SHA-256 sums and a signed build-provenance attestation. Actions pinned to commit SHAs, least-privilege tokens. | `.github/workflows/release.yml`; `gh attestation verify` |
 | **`main` only changes through reviewed, green PRs.** No direct pushes, no force-pushes; all three CI jobs must pass. The rule is a file in the repo, tested against the CI job names, and an independent OpenSSF Scorecard grades the setup weekly. | `.github/rulesets/main.json`; `tests/test_repo.py`; Scorecard badge above |
 
@@ -260,6 +260,17 @@ looks unfamiliar. The prompt asks for Neptune's own commands rather than
 invented `sudo` one-liners — [`docs/advisor.md`](docs/advisor.md) explains why.
 `--replay <file>` re-renders any saved result without scanning.
 
+**Going deeper (optional).** If you have `yara` or `clamav` installed, Neptune
+can check the files it flagged against known-malware signatures — only those
+files, never a whole-disk scan. A signature match becomes a finding to verify
+first; a clean result is reassurance, not a clearance; a missing tool changes
+nothing and costs no points. `./neptune.sh --inspect` re-checks just the last
+run's flagged files in seconds. `./neptune.sh --inspect --update-rules` updates
+signatures — the one part of Neptune that reaches the network: ClamAV's own
+`freshclam`, and YARA rules only from a source you name (`NEPTUNE_YARA_URL`),
+because Neptune won't pick a third-party ruleset for you. Rules live in
+`~/.neptune/yara`; delete that folder to remove them.
+
 **Reading the results.** A flag is a lead, not a verdict. [`docs/reading-reports.md`](docs/reading-reports.md)
 covers telling a real finding from a vendor habit.
 [`docs/sample-report.txt`](docs/sample-report.txt) is a real run, sanitized.
@@ -305,7 +316,7 @@ where it could not look. The full list is in [`SECURITY.md`](SECURITY.md).
 
 ## Status
 
-Version 1.3.0. See [`CHANGELOG.md`](CHANGELOG.md) for what changed,
+Version 1.2.0. See [`CHANGELOG.md`](CHANGELOG.md) for what changed,
 [`ROADMAP.md`](ROADMAP.md) for what is next, and
 [`CONTRIBUTING.md`](CONTRIBUTING.md) to help. A demo recording is pending; the
 recording and scrubbing procedure is in [`docs/demo/RECORDING.md`](docs/demo/RECORDING.md).

@@ -11,12 +11,23 @@ explains each in full — symptom, root cause, fix, and what was learned.
 
 ## [Unreleased]
 
-## [1.3.0] — 2026-10-12
-
-Updates you can act on, app by app, and two fixes from real runs on a second
-Mac (the python finder and the App Store check).
-
 ### Added
+- **Optional deep inspection (`--inspect`, `--update-rules`).** When `yara` or
+  `clamscan` is installed, Neptune now scans ONLY the handful of files it already
+  flagged this run against known-malware signatures. A signature hit becomes a
+  scored attention finding (`CHECK=malware-signature`) that reads plainly and
+  carries the usual verify-first advice; a clean sweep is printed as reassurance
+  but recorded as nothing (it never reads as a clearance); a tool that cannot read
+  a file is an `unknown`, not a pass. A missing tool is never a dependency and
+  never lowers a score — the base scan stays zero-dependency. `--inspect` re-checks
+  just the last run's flagged files in seconds without a full re-scan, and when no
+  tool is ready it prints the exact `brew install` command rather than installing
+  anything. `--update-rules` is the single, disclosed network touch: it names every
+  source before fetching, runs ClamAV's own `freshclam`, and for YARA fetches only
+  a ruleset you name in `NEPTUNE_YARA_URL` (verified against `NEPTUNE_YARA_SHA256`
+  when set) — Neptune never bakes in a third-party rules source for you. Rules live
+  under `~/.neptune/yara/`; `rm -rf` that folder removes everything fetched. New
+  `scripts/inspect_deep.sh`; see `claude/PR-6-optional-enrichment.md`.
 - **Updates, app by app** in the HTML report, the JSON (`software`) and the AI
   brief. `check_updates.sh` already knew which apps were behind; the report only
   showed counts ("1 formula and 2 casks"). Now every outdated item is listed with

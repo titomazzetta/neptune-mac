@@ -461,6 +461,10 @@ nep_append_history() {
 # never need python; only the optional outputs do.
 # shellcheck source=find_python.sh
 . "$DIR/find_python.sh"
+# Optional deep-inspection helpers; needed here for --update-rules (the single,
+# disclosed network touch) and defined-functions-only, so sourcing is harmless.
+# shellcheck source=inspect_deep.sh
+. "$DIR/inspect_deep.sh"
 python_ok() {
   find_python || return 1
   export NEPTUNE_PYTHON="$NEP_PY"
@@ -529,6 +533,16 @@ neptune.sh — run the Neptune scans, then report a verdict and scores.
   ./neptune.sh --replay FILE      re-render a saved --json file (or a findings
                                   file) without scanning: no sudo, no state
                                   written — for demos, CI and second opinions
+  ./neptune.sh --inspect          re-check ONLY the files your last run flagged,
+                                  against yara/clamav if installed — seconds, not
+                                  a full re-scan. Optional; a missing tool just
+                                  means this does nothing and costs no points.
+  ./neptune.sh --inspect --update-rules
+                                  first update signatures — the ONE part of
+                                  Neptune that reaches the network: ClamAV's
+                                  freshclam, and YARA rules only from a source you
+                                  name (NEPTUNE_YARA_URL). Nothing is fetched or
+                                  installed on its own.
   ./neptune.sh --version
 
 Acknowledged findings stay listed and stay counted — they only stop deducting
@@ -556,11 +570,14 @@ USAGE
 
 JSON_OUT=false; HTML_OUT=false; SANITIZE_OUT=false; VERBOSE=false; NO_HTML=false
 ACK_ARG=""; REPLAY=""; OUT_DIR=""; BRIEF_NAME=""; JSON_NAME=""
+INSPECT=false; UPDATE_RULES=false
 while [ $# -gt 0 ]; do
   case "$1" in
     --json)        JSON_OUT=true ;;
     --html)        HTML_OUT=true ;;
     --sanitize)    SANITIZE_OUT=true ;;
+    --inspect)     INSPECT=true ;;
+    --update-rules) UPDATE_RULES=true ;;
     --acknowledge) shift; ACK_ARG="${1:-}"; [ -n "$ACK_ARG" ] || { echo "--acknowledge needs a number" >&2; exit 64; } ;;
     --replay)      shift; REPLAY="${1:-}";  [ -n "$REPLAY" ]  || { echo "--replay needs a file" >&2; exit 64; } ;;
     --out)         shift; OUT_DIR="${1:-}"; [ -n "$OUT_DIR" ] || { echo "--out needs a directory" >&2; exit 64; } ;;
@@ -684,6 +701,49 @@ if [ -n "$REPLAY" ]; then
 fi
 
 ############################################################################
+# --update-rules / --inspect: the optional deep-inspection layer.
+#   --update-rules  the one disclosed network touch (ClamAV freshclam; YARA
+#                   rules only from a source you name). Runs, then continues to
+#                   --inspect if that was asked too, else exits.
+#   --inspect       re-check ONLY the files the last run flagged, against the
+#                   installed signatures — seconds, not a full re-scan. Reads
+#                   nothing new from the machine beyond those files.
+############################################################################
+if $UPDATE_RULES; then
+  deep_update_rules || true
+  echo
+  $INSPECT || exit 0
+fi
+if $INSPECT; then
+  LAST_FLAGGED="$NEPTUNE_HOME/last-flagged.tsv"
+  if [ ! -s "$LAST_FLAGGED" ]; then
+    echo "Nothing to inspect yet: no flagged files were saved from a previous run." >&2
+    echo "Run ./neptune.sh first; --inspect then re-checks just what it flagged." >&2
+    exit 64
+  fi
+  if [ -z "$(deep_enrichers)" ]; then
+    echo "No deep-inspection tool is ready. Install one and point it at rules you trust:" >&2
+    echo "  brew install clamav   then  ./neptune.sh --inspect --update-rules" >&2
+    echo "  brew install yara     then  NEPTUNE_YARA_URL=<url> ./neptune.sh --inspect --update-rules" >&2
+    exit 64
+  fi
+  OUT_DIR="${OUT_DIR:-$HOME/Desktop}"
+  mkdir -p "$OUT_DIR" "$NEPTUNE_HOME" || exit 64
+  export NEPTUNE_FINDINGS="$FINDINGS" NEPTUNE_INSPECT_ONLY=1 \
+         NEPTUNE_FLAGGED="$LAST_FLAGGED" NEPTUNE_REPORT_DIR="$OUT_DIR"
+  "$DIR/redflag_scan.sh" </dev/null
+  HITS=$(awk -F'|' '$1=="attention" && $4=="malware-signature"' "$FINDINGS" 2>/dev/null | wc -l | tr -d ' ')
+  echo
+  if [ "${HITS:-0}" -gt 0 ]; then
+    printf '  %s%s %s signature match(es) on files flagged last run — leads to verify, not proof.%s\n' "$RED" "$SYM_WARN" "$HITS" "$RST"
+    printf '  %sRun a full ./neptune.sh to see them scored alongside everything else.%s\n' "$DIM" "$RST"
+    exit 1
+  fi
+  printf '  %s%s No signature matched. A clean result here is reassurance, not a clearance.%s\n' "$GRN" "$SYM_OK" "$RST"
+  exit 0
+fi
+
+############################################################################
 # Full run
 ############################################################################
 if [ "$(id -u)" -eq 0 ]; then
@@ -739,6 +799,10 @@ export NEPTUNE_REPORT_DIR="$OUT_DIR"
 # here: the reports turn it into "what to update, and how", app by app.
 INVENTORY="$TMP/inventory.tsv"; : > "$INVENTORY"
 export NEPTUNE_INVENTORY="$INVENTORY"
+# redflag writes the files it flagged here (one path per line) so a later
+# `--inspect` can re-check just those without a full re-scan.
+FLAGGED_LIST="$TMP/flagged.txt"; : > "$FLAGGED_LIST"
+export NEPTUNE_FLAGGED="$FLAGGED_LIST"
 
 strip_ansi() { sed -E $'s/\x1b\\[[0-9;]*[a-zA-Z]//g; s/\x1b\\(B//g'; }
 
@@ -836,6 +900,9 @@ nep_run_pipeline "$FINDINGS" "$ALLOW" "$TMP" "$RUN_LABEL"
 # can say how many runs INCLUDING this one have seen a finding; history.tsv is
 # appended last so the renderer's "previous run" really is the previous one.
 cp "$LISTING" "$LAST_LISTING"
+# Keep the flagged-file list so `--inspect` can re-check it later. Always write
+# it (empty when nothing was flagged) so a stale list never outlives its run.
+cp "$FLAGGED_LIST" "$NEPTUNE_HOME/last-flagged.tsv" 2>/dev/null || true
 nep_update_seen "$SCORED" "$SEEN" "$(date '+%Y-%m-%d')"
 RENDER_SEEN="$SEEN"; RENDER_HISTORY="$HISTORY"
 if $JSON_OUT; then render json "$JSON_PATH"; fi

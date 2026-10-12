@@ -32,6 +32,12 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"   # BASH_SOURCE: correct
 REPORT="${NEPTUNE_REPORT_DIR:-$HOME/Desktop}/redflag_report_$(date '+%Y-%m-%d_%H%M').txt"
 FLAGS=()
 
+# Optional deep-inspection helpers (yara/clamav). Defines functions only; the
+# enrichment pass near the end uses them. Sourced here so it is available whether
+# this script runs standalone or under neptune.sh.
+# shellcheck source=inspect_deep.sh
+. "$DIR/inspect_deep.sh"
+
 # Structured result records — see the record format in neptune.sh. No-op unless
 # neptune.sh sets NEPTUNE_FINDINGS, so a standalone run is unchanged. Duplicated
 # into each scan on purpose: the scans stay independently runnable.
@@ -157,13 +163,17 @@ mkdir -p "$(dirname "$REPORT")"
 : > "$REPORT"
 out "${BOLD}Red-flag scan — $(hostname) — $(date '+%Y-%m-%d %H:%M')${RST}"
 out "macOS $(sw_vers -productVersion) ($(sw_vers -buildVersion))"
-sudo -v || exit 1
-# Keep-alive for the cached sudo credential. Its output is detached: the loop's
-# `sleep` outlives a kill of the loop by up to 50 s, and while it holds this
-# script's stdout, `neptune.sh`'s `| tee` waits for it (found in review).
-( while true; do sudo -n true 2>/dev/null; sleep 50; done ) >/dev/null 2>&1 </dev/null & KA=$!
-disown "$KA" 2>/dev/null || true   # no "Terminated" notice when the trap stops it
-trap 'kill $KA 2>/dev/null' EXIT
+# --inspect only reads the already-flagged files with user-level tools, so it
+# needs no password; a normal scan asks once and caches it.
+if [ "${NEPTUNE_INSPECT_ONLY:-}" != "1" ]; then
+  sudo -v || exit 1
+  # Keep-alive for the cached sudo credential. Its output is detached: the loop's
+  # `sleep` outlives a kill of the loop by up to 50 s, and while it holds this
+  # script's stdout, `neptune.sh`'s `| tee` waits for it (found in review).
+  ( while true; do sudo -n true 2>/dev/null; sleep 50; done ) >/dev/null 2>&1 </dev/null & KA=$!
+  disown "$KA" 2>/dev/null || true   # no "Terminated" notice when the trap stops it
+  trap 'kill $KA 2>/dev/null' EXIT
+fi
 
 # Binaries already flagged, one per line, so the same unverified binary is not
 # reported again by a later check that sees it from a different angle.
@@ -171,6 +181,84 @@ FLAGGED_BINS=""
 mark_flagged() { FLAGGED_BINS="$FLAGGED_BINS
 $1"; }
 already_flagged() { printf '%s\n' "$FLAGGED_BINS" | grep -qxF "$1"; }
+
+# deep_enrich — the optional deep-inspection pass. Runs only when an enricher is
+# usable; scans ONLY files already flagged this run; a signature hit becomes a
+# scored attention finding, a clean sweep a single no-cost info line, and a tool
+# error an unknown (fail closed). Absent tools cost nothing and say nothing.
+#
+# A hit is deliberately its own `attention` record rather than a mutation of the
+# finding it corroborates: in Neptune a record is the only thing that moves the
+# score, and records are append-only, so "escalate the finding" can only mean
+# "add an attention record for the same file". Both lines then show — the file
+# was flagged for being unsigned AND it matches a signature — which is honest.
+deep_enrich() {
+  local ENR RULES FILE FILES TOOL TOOLP VERD HITS=0 SCANNED=0
+  ENR=$(deep_enrichers)
+  if [ -z "$ENR" ]; then deep_offer_install; return 0; fi
+  FILES=$(printf '%s\n' "$FLAGGED_BINS" | awk 'NF && !seen[$0]++ && /^\//')
+  [ -n "$FILES" ] || return 0
+  RULES=$(deep_yara_rules)
+  CHECK=malware-signature
+  section "Deep inspection (optional)"
+  note "Checking the files flagged above against known-malware signatures."
+  while IFS= read -r FILE; do
+    [ -n "$FILE" ] || continue
+    [ -f "$FILE" ] || continue
+    SCANNED=$((SCANNED + 1))
+    while IFS= read -r TOOL; do
+      [ -n "$TOOL" ] || continue
+      TOOLP=$(deep_tool "$TOOL")
+      VERD=$(deep_scan_file "$TOOL" "$TOOLP" "$FILE" "$RULES")
+      case "$VERD" in
+        hit:*) flag "$(deep_label "$TOOL") signature match on a flagged file: ${VERD#hit:} ($FILE)"; HITS=$((HITS + 1)) ;;
+        err)   unknown "$(deep_label "$TOOL") could not inspect $FILE" ;;
+        *)     : ;;
+      esac
+    done <<ENRICHERS
+$ENR
+ENRICHERS
+  done <<FLAGGEDFILES
+$FILES
+FLAGGEDFILES
+  if [ "$SCANNED" -gt 0 ] && [ "$HITS" -eq 0 ]; then
+    # Reassurance, printed but not recorded: a clean sweep is not a finding, and
+    # must never read, in the report, as if it cleared the items it scanned.
+    note "No signature matched the $SCANNED flagged file(s) checked — reassurance, not a clearance."
+  fi
+}
+
+# deep_offer_install — shown only when something was flagged but no enricher is
+# ready. Neptune prints the command; it never installs or fetches anything.
+deep_offer_install() {
+  local HAVE
+  [ -n "$(printf '%s\n' "$FLAGGED_BINS" | awk 'NF && /^\//')" ] || return 0
+  section "Deep inspection (optional)"
+  HAVE=$(deep_tools_present)
+  if printf '%s\n' "$HAVE" | grep -qx yara && [ -z "$(deep_yara_rules)" ]; then
+    note "YARA is installed but has no rules yet. Point it at a ruleset you trust:"
+    note "  NEPTUNE_YARA_URL=<url> ./neptune.sh --inspect --update-rules"
+  else
+    note "No deep-inspection tool is installed. To check the flagged files against"
+    note "known-malware signatures (Neptune installs and fetches nothing itself):"
+    note "  brew install clamav   then  ./neptune.sh --inspect --update-rules"
+    note "  brew install yara     then  ./neptune.sh --inspect --update-rules"
+  fi
+}
+
+# --inspect mode (NEPTUNE_INSPECT_ONLY=1): skip every normal scan and run only
+# the enrichment pass against the file list neptune.sh saved from the last run.
+if [ "${NEPTUNE_INSPECT_ONLY:-}" = "1" ]; then
+  SCAN=redflag; CATEGORY=security
+  if [ -n "${NEPTUNE_FLAGGED:-}" ] && [ -s "$NEPTUNE_FLAGGED" ]; then
+    FLAGGED_BINS=$(cat "$NEPTUNE_FLAGGED")
+  fi
+  out "${BOLD}Deep inspection of files flagged by the last run${RST}"
+  deep_enrich
+  out ""
+  out "Full report saved to: $REPORT"
+  exit 0
+fi
 
 ############################################################
 # 1. Security posture
@@ -623,6 +711,16 @@ else
   rm -f "$EXT_TMP"
   [ "$RISKY_N" -eq 0 ] && pass "$EXT_N browser extension(s) checked; none can reroute traffic or attach a debugger"
 fi
+
+############################################################
+# Optional deep inspection, and save the flagged file list so `--inspect` can
+# re-check these same files later without a full re-scan.
+############################################################
+CHECK=malware-signature
+if [ -n "${NEPTUNE_FLAGGED:-}" ]; then
+  printf '%s\n' "$FLAGGED_BINS" | awk 'NF && !seen[$0]++ && /^\//' > "$NEPTUNE_FLAGGED" 2>/dev/null || true
+fi
+deep_enrich
 
 ############################################################
 # SUMMARY

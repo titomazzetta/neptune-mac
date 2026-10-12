@@ -107,3 +107,5 @@ scan-failed	.	 stopped with.*$	-	{s} didn't finish	So some of its checks are mis
 scan-silent	.	 finished but.*$	-	{s} finished without recording anything	So its checks can't count as passed.
 scan-missing	.	 did not run.*$	-	{s} didn't run	So none of its checks are in this report.
 record-format	.	 result line.*$	-	{s} scan results couldn't be read	So those checks are missing from this report.
+malware-signature	could not inspect	-	^.*could not inspect 	Could not scan a flagged file for signatures: {s}	The file may be unreadable; it stays unchecked, not cleared.
+malware-signature	signature match on a flagged file	 \(/[^)]*\)$	^.*flagged file: 	A flagged file matches a known-malware signature: {s}	+Already flagged, and now matching a signature — verify this first.

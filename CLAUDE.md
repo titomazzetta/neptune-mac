@@ -90,7 +90,8 @@ These are hard rules. Breaking any of them is a regression, even if the code
 ```
 scripts/         the eleven Neptune scripts, the renderer (neptune_render.py), the
                  extension inspector (neptune_inspect.py), vendor-quirks.tsv,
-                 the phrasebook (phrases.tsv), and find_python.sh (sourced:
+                 the phrasebook (phrases.tsv), inspect_deep.sh (sourced: the
+                 optional yara/clamav enrichment helpers), and find_python.sh (sourced:
                  the one way any script picks a python3 — the first that runs)
 tests/           lint.sh (runs everything), unit.sh, test_render.py,
                  blast_radius.sh, macos.sh, e2e_assert.py, fixtures/
@@ -107,7 +108,7 @@ CLAUDE.md        this file
 |---|---|---|
 | `neptune.sh` | Master runner — verdict, scores, `--json`, `--html`, `--replay`, one combined report | `~/.neptune/allow` with `--acknowledge`; `history.tsv`, `seen.tsv`, `last-listing.tsv` every run; nothing with `--replay` |
 | `sentry.sh` | Baseline diff, process→network map, staleness | baseline files only |
-| `redflag_scan.sh` | Deep audit: persistence, listeners, interception | no |
+| `redflag_scan.sh` | Deep audit: persistence, listeners, interception; optional yara/clamav enrichment of what it flagged | no |
 | `audit_system.sh` | Resources, persistence, disk | no |
 | `network_check.sh` | NAT, DNS, latency, connections | no |
 | `netcheck_plus.sh` | Deep network: Wi-Fi quality, LAN census, router checklist (standalone, not in the suite) | no |
@@ -181,6 +182,20 @@ CLAUDE.md        this file
   is never done by `fix.sh` itself. Where no honest one-command fix exists,
   write guidance. A new check id needs a `plan_for` entry — the unit test fails
   on one without a kind or guidance.
+- **Optional enrichment corroborates; it never becomes a dependency.**
+  `inspect_deep.sh` is sourced by `redflag_scan.sh` and runs only when `yara` or
+  `clamscan` is present AND has rules. It scans ONLY files already in
+  `FLAGGED_BINS` — never a whole-disk sweep. A signature hit is emitted as its
+  own `attention` record (`CHECK=malware-signature`), NOT by mutating the finding
+  it corroborates: in this pipeline a record is the only thing that moves the
+  score and records are append-only, so "escalate the finding" can only mean "add
+  a record for the same file". A clean sweep is printed but never recorded (a
+  clean result must not read as a clearance); a tool that cannot read a file is an
+  `unknown`. A missing tool records nothing and costs nothing. The ONE network
+  touch is `deep_update_rules` (behind `--update-rules`): it names every source
+  first, uses ClamAV's `freshclam`, and fetches YARA rules only from a
+  user-named `NEPTUNE_YARA_URL` — Neptune bakes in no third-party rules source.
+  A test (`tests/test_render.py::Enrichment`) asserts nothing else touches the net.
 - **Prefer editing one script over touching many.** These are independent by
   design; a change to `sentry.sh` should not require changes elsewhere.
 
@@ -192,9 +207,7 @@ and tests that source the shipping code on macOS under bash 3.2.
 
 v1.1.0 added the guided fixer (`--fix`) and the Homebrew-catalog comparison
 for self-updating apps. v1.2.0 added the phrasebook, the explanation-ladder
-report, the fix queue and the AI brief. v1.3.0 added the per-app update inventory
-("Updates, app by app") and hardened the python3 and `mas` checks for a Mac with
-leftover Intel Homebrew tools. Two false alarms from real runs are
+report, the fix queue and the AI brief. Two false alarms from real runs are
 queued first: an empty launch-agent plist (it runs nothing, so it should not
 be an unknown) and a helper whose binary vanished because its app updated
 while running (restart the app, not a red flag). After those is **login items from Background Task Management**
