@@ -216,7 +216,9 @@ v1.1.0 added the guided fixer (`--fix`) and the Homebrew-catalog comparison
 for self-updating apps. v1.2.0 added the phrasebook, the explanation-ladder
 report, the fix queue and the AI brief. v1.3.0 added the per-app update inventory
 ("Updates, app by app") and hardened the python3 and `mas` checks for a Mac with
-leftover Intel Homebrew tools. Two false alarms from real runs are
+leftover Intel Homebrew tools. v1.4.0 added optional deep inspection
+(`inspect_deep.sh`, `--inspect`, `--update-rules`): ClamAV/YARA corroborate what
+the scan flagged, never decide, and never become a dependency. Two false alarms from real runs are
 queued first: an empty launch-agent plist (it runs nothing, so it should not
 be an unknown) and a helper whose binary vanished because its app updated
 while running (restart the app, not a red flag). After those is **login items from Background Task Management**

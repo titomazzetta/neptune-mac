@@ -11,6 +11,13 @@ explains each in full — symptom, root cause, fix, and what was learned.
 
 ## [Unreleased]
 
+## [1.4.0] — 2026-10-12
+
+Optional deep inspection: when ClamAV or YARA is installed, Neptune checks the
+files it already flagged against known-malware signatures, and the report says
+which next step fits your Mac. Plus `./neptune.sh` from the top folder, and the
+fixes found by setting ClamAV up for real.
+
 ### Added
 - **Optional deep inspection (`--inspect`, `--update-rules`).** When `yara` or
   `clamscan` is installed, Neptune now scans ONLY the handful of files it already
