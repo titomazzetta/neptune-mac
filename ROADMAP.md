@@ -57,6 +57,14 @@ Removed deliberately, so they stop reading as debt:
 
 ## Done
 
+**v1.4.0** — optional deep inspection: with ClamAV or YARA installed,
+the files a scan flags are checked against known-malware signatures (one run,
+only those files, never as root, nothing left running); a match is a finding to
+verify, a miss is reassurance. `--inspect` re-checks them in seconds,
+`--update-rules` refreshes signatures and offers ClamAV's one-time config with a
+y/N, and the report's Recommended commands fit the step to the Mac.
+`./neptune.sh` now also works from the top folder.
+
 **v1.3.0** — the report now lists updates app by app (what has a newer
 version and whether Homebrew, Apple, the App Store or the app itself updates it),
 plus two fixes from a second Mac: pick the first python3 that actually runs, and
